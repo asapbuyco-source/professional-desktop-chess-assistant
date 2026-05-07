@@ -81,9 +81,8 @@
 [[headers]]
   for = "/*"
   [headers.values]
-    # CSP: added worker-src 'self' for the engine Web Worker.
-    # blob: allows Vite dev-mode worker URLs in some configurations.
-    Content-Security-Policy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self'; connect-src 'self'"
+    # CSP: Allow 'unsafe-inline' for Vite/React and worker-src for engine.
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self'; connect-src 'self'"
     X-Content-Type-Options = "nosniff"
     X-Frame-Options = "DENY"
     X-XSS-Protection = "1; mode=block"

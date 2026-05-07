@@ -423,13 +423,21 @@ export function analyzePosition(fen: string, depth: number, maxTimeMs = 3000): E
     const g = new Chess(fen);
     try {
       const m = g.move(bookMove);
+      const topMove: TopMove = {
+        san: m.san,
+        from: m.from,
+        to: m.to,
+        evaluation: 0,
+      };
       return {
         bestMove: m.san,
         evaluation: 0,
         depth: 0,
         nodes: 0,
         pv: [m.san],
-        topMoves: [{ move: m.san, score: 0, pv: [m.san] }],
+        isMate: false,
+        mateIn: null,
+        topMoves: [topMove],
       };
     } catch { /* ignore */ }
   }

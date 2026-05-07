@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="description" content="Professional chess assistant with advanced engine analysis, game management, and tactical training. Perfect for chess enthusiasts and players of all levels." />
     <meta name="theme-color" content="#07070d" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Chess Assistant" />
     <meta name="application-name" content="Chess Assistant" />
@@ -31,15 +31,5 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-    <!-- Register service worker for offline support -->
-    <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js').catch(() => {
-            // Service worker registration failed, app will work in online mode only
-          });
-        });
-      }
-    </script>
   </body>
 </html>
