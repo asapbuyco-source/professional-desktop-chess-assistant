@@ -1,9 +1,10 @@
 /**
  * useEngineWorker.ts
  *
- * Singleton manager for the engine Web Worker.
- * Keeps one worker alive for the app's lifetime and cancels
- * any in-flight request when a newer one arrives.
+ * Manages engine analysis with Stockfish WASM as primary engine
+ * and custom JS engine as fallback.
+ *
+ * Priority: Stockfish WASM > Custom JS engine
  */
 
 import type { EngineAnalysis } from '@/types';
@@ -11,50 +12,110 @@ import { analyzePosition } from '@/engine';
 
 type AnalysisCallback = (result: EngineAnalysis | null) => void;
 
-let worker: Worker | null = null;
+let sfWorker: Worker | null = null;
+let sfFailed = false;  // If Stockfish fails once, stop trying
+let jsWorker: Worker | null = null;
+
 let pendingId: string | null = null;
 let pendingCallback: AnalysisCallback | null = null;
 
-function getWorker(): Worker {
-  if (!worker) {
-    worker = new Worker(new URL('../engineWorker.ts', import.meta.url), {
+function getStockfishWorker(): Worker | null {
+  if (sfFailed) return null;
+
+  if (!sfWorker) {
+    try {
+      sfWorker = new Worker(
+        new URL('../stockfishWorker.ts', import.meta.url),
+        { type: 'module' }
+      );
+
+      sfWorker.onmessage = (e: MessageEvent<{
+        id: string;
+        result?: EngineAnalysis;
+        error?: string;
+      }>) => {
+        const { id, result, error } = e.data;
+
+        if (id !== pendingId) return;
+
+        if (error) {
+          // Stockfish failed — fall back to JS engine for this request
+          console.warn('Stockfish error, falling back to JS engine:', error);
+          sfFailed = true;
+          sfWorker?.terminate();
+          sfWorker = null;
+
+          // Re-dispatch to JS engine
+          const cb = pendingCallback;
+          if (cb && pendingId) {
+            // We don't have fen/depth/maxTimeMs here, so just return null
+            // The next request will use JS engine directly
+            pendingId = null;
+            pendingCallback = null;
+            cb(null);
+          }
+          return;
+        }
+
+        pendingId = null;
+        const cb = pendingCallback;
+        pendingCallback = null;
+        if (cb) cb(result ?? null);
+      };
+
+      sfWorker.onerror = () => {
+        console.warn('Stockfish worker failed to load, using JS engine');
+        sfFailed = true;
+        sfWorker = null;
+        pendingId = null;
+        const cb = pendingCallback;
+        pendingCallback = null;
+        if (cb) cb(null);
+      };
+    } catch {
+      sfFailed = true;
+      return null;
+    }
+  }
+
+  return sfWorker;
+}
+
+function getJSWorker(): Worker {
+  if (!jsWorker) {
+    jsWorker = new Worker(new URL('../engineWorker.ts', import.meta.url), {
       type: 'module',
     });
 
-    worker.onmessage = (e: MessageEvent<{
+    jsWorker.onmessage = (e: MessageEvent<{
       id: string;
       result?: EngineAnalysis;
       error?: string;
     }>) => {
       const { id, result, error } = e.data;
-
-      // Ignore stale responses
       if (id !== pendingId) return;
 
       pendingId = null;
       const cb = pendingCallback;
       pendingCallback = null;
-
-      if (cb) {
-        cb(error ? null : (result ?? null));
-      }
+      if (cb) cb(error ? null : (result ?? null));
     };
 
-    worker.onerror = () => {
+    jsWorker.onerror = () => {
       pendingId = null;
       const cb = pendingCallback;
       pendingCallback = null;
       if (cb) cb(null);
     };
   }
-  return worker;
+  return jsWorker;
 }
 
 let idCounter = 0;
 
 /**
  * Request an engine analysis.
- * Any previously pending request is superseded (its callback is dropped).
+ * Uses Stockfish WASM if available, falls back to custom JS engine.
  */
 export function requestAnalysis(
   fen: string,
@@ -66,11 +127,23 @@ export function requestAnalysis(
   pendingId = id;
   pendingCallback = callback;
 
+  // Try Stockfish first
+  const sf = getStockfishWorker();
+  if (sf) {
+    try {
+      sf.postMessage({ id, fen, depth, maxTimeMs });
+      return;
+    } catch {
+      sfFailed = true;
+    }
+  }
+
+  // Fall back to JS engine worker
   try {
-    const w = getWorker();
+    const w = getJSWorker();
     w.postMessage({ id, fen, depth, maxTimeMs });
   } catch {
-    // Worker unavailable (e.g. CSP or old browser) — fallback to sync on main thread
+    // Worker unavailable — sync fallback on main thread
     pendingId = null;
     pendingCallback = null;
     try {
@@ -81,10 +154,12 @@ export function requestAnalysis(
   }
 }
 
-/** Terminate the worker (call on app unmount if needed). */
+/** Terminate all workers. */
 export function terminateWorker(): void {
-  worker?.terminate();
-  worker = null;
+  sfWorker?.terminate();
+  sfWorker = null;
+  jsWorker?.terminate();
+  jsWorker = null;
   pendingId = null;
   pendingCallback = null;
 }
