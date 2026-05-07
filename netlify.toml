@@ -2,15 +2,19 @@
 # Deploy with: netlify deploy --prod --dir=dist
 
 [build]
-  command = "npm install && npm run build"
+  # Netlify automatically runs npm install if it finds a package.json.
+  # We just need to trigger the build.
+  command = "npm run build"
   publish = "dist"
 
-# FIX: Merged inline environment = { NODE_VERSION = "18.17.1" } from [build]
-# into this single [build.environment] section. TOML does not allow defining
-# the same key both inline and as a subtable header — that was the parse error.
 [build.environment]
-  NODE_VERSION = "18.17.1"
-  NODE_ENV = "production"
+  # Vite 7 requires Node 20.19.0+ or 22.12.0+. Using latest LTS (22).
+  NODE_VERSION = "22"
+  
+  # IMPORTANT: Removed NODE_ENV = "production" from here.
+  # If NODE_ENV is "production" during 'npm install', npm skips devDependencies.
+  # Since vite and typescript are devDependencies, the build would fail with "vite: not found".
+  
   VITE_APP_ENV = "production"
   VITE_APP_VERSION = "1.0.0"
 
@@ -33,15 +37,12 @@
 # ── Context overrides ─────────────────────────────────────────────────────────
 
 [context.production]
-  command = "npm install && npm run build"
-  environment = { NODE_ENV = "production", VITE_APP_ENV = "production" }
+  environment = { VITE_APP_ENV = "production" }
 
 [context.deploy-preview]
-  command = "npm install && npm run build"
-  environment = { NODE_ENV = "production", VITE_APP_ENV = "production" }
+  environment = { VITE_APP_ENV = "production" }
 
 [context.branch-deploy]
-  command = "npm install && npm run build"
   environment = { NODE_ENV = "development", VITE_APP_ENV = "development" }
 
 # ── SPA redirect ─────────────────────────────────────────────────────────────
@@ -87,7 +88,5 @@
     X-Frame-Options = "DENY"
     X-XSS-Protection = "1; mode=block"
     Referrer-Policy = "strict-origin-when-cross-origin"
-    # FIX: removed microphone=() — that blocked the voice-input feature.
-    # self allows microphone access only from the same origin.
     Permissions-Policy = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(self), payment=(), usb=()"
     Service-Worker-Allowed = "/"
