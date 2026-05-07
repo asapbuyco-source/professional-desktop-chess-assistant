@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>♟</text></svg>" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="description" content="Professional chess assistant with advanced engine analysis, game management, and tactical training. Perfect for chess enthusiasts and players of all levels." />
+    <meta name="theme-color" content="#07070d" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Chess Assistant" />
+    <meta name="application-name" content="Chess Assistant" />
+    
+    <!-- Open Graph / Social Media -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Chess Assistant — Professional Desktop Chess Analyzer" />
+    <meta property="og:description" content="Professional chess assistant with advanced engine analysis, game management, and tactical training." />
+    <meta property="og:image" content="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 630'><rect fill='%2307070d' width='1200' height='630'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='120' fill='%2300ff88'>♟ Chess Assistant ♞</text></svg>" />
+    
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Chess Assistant" />
+    <meta name="twitter:description" content="Professional chess analysis and game management tool" />
+    
+    <!-- Web App Manifest -->
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect fill='%2307070d' width='192' height='192' rx='40'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='120' fill='%2300ff88'>♟</text></svg>" />
+    
+    <title>Chess Assistant — Professional Desktop Chess Analyzer</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <!-- Register service worker for offline support -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch(() => {
+            // Service worker registration failed, app will work in online mode only
+          });
+        });
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,41 @@
+{
+  "name": "Professional Chess Assistant",
+  "short_name": "Chess Assistant",
+  "description": "Professional chess assistant with advanced engine analysis and tactical training",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#07070d",
+  "background_color": "#07070d",
+  "categories": ["games", "productivity"],
+  "screenshots": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 540 720'><rect fill='%2307070d' width='540' height='720'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='100' fill='%2300ff88'>♟</text></svg>",
+      "sizes": "540x720",
+      "type": "image/svg+xml",
+      "form_factor": "narrow"
+    },
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1280 720'><rect fill='%2307070d' width='1280' height='720'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='150' fill='%2300ff88'>♟</text></svg>",
+      "sizes": "1280x720",
+      "type": "image/svg+xml",
+      "form_factor": "wide"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "New Game",
+      "short_name": "New Game",
+      "description": "Start a new chess game",
+      "url": "/?action=new",
+      "icons": [
+        {
+          "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect fill='%2307070d' width='192' height='192' rx='40'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='120' fill='%2300ff88'>♘</text></svg>",
+          "sizes": "192x192",
+          "type": "image/svg+xml"
+        }
+      ]
+    }
+  ]
+}
