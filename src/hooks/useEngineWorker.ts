@@ -7,6 +7,7 @@
  */
 
 import type { EngineAnalysis } from '@/types';
+import { analyzePosition } from '@/engine';
 
 type AnalysisCallback = (result: EngineAnalysis | null) => void;
 
@@ -69,16 +70,14 @@ export function requestAnalysis(
     const w = getWorker();
     w.postMessage({ id, fen, depth, maxTimeMs });
   } catch {
-    // Worker unavailable (e.g. CSP or old browser) — fallback to sync
+    // Worker unavailable (e.g. CSP or old browser) — fallback to sync on main thread
     pendingId = null;
     pendingCallback = null;
-    import('../engine').then(({ analyzePosition }) => {
-      try {
-        callback(analyzePosition(fen, depth, maxTimeMs));
-      } catch {
-        callback(null);
-      }
-    });
+    try {
+      callback(analyzePosition(fen, depth, maxTimeMs));
+    } catch {
+      callback(null);
+    }
   }
 }
 

@@ -1,18 +1,16 @@
 /**
- * Board.tsx
+ * Board.tsx — production hardened
  *
- * Fixes vs. original:
- *  1. handleSquareHover was calling previewMove on every mouseover event,
- *     firing dozens of worker requests per second while hovering.
- *     Now debounced to 120 ms.
- *  2. boardSize resize handler debounced to 100 ms (was instant).
- *  3. Memoised callbacks with useCallback to prevent unnecessary re-renders.
- *  4. useRef used to carry the debounce timer.
+ * Fixes:
+ *  1. "Pieces don't move" bug: Corrected Chessboard options and memoised them.
+ *     Added logs to verify move success.
+ *  2. Search speed: optimized engine.ts (TT + no mobility).
+ *  3. boardStyle, lightSquareStyle, darkSquareStyle memoised.
  */
 
 import { Chessboard } from 'react-chessboard';
 import { useChessStore } from '@/store';
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 
 function computeBoardSize(width: number, height: number): number {
   const MIN = 200;
@@ -28,6 +26,16 @@ function computeBoardSize(width: number, height: number): number {
 
   return Math.max(MIN, maxSize);
 }
+
+const LIGHT_SQUARE_STYLE = { backgroundColor: '#a0aab4' };
+const DARK_SQUARE_STYLE  = { backgroundColor: '#556b7a' };
+const BOARD_STYLE = {
+  borderRadius: '6px',
+  boxShadow: '0 8px 40px rgba(0,0,0,0.6), 0 0 80px rgba(0,255,136,0.05)',
+};
+const CHECK_STYLE = {
+  background: 'radial-gradient(ellipse at center, rgba(255,0,0,0.55) 0%, rgba(255,50,50,0.2) 60%, rgba(255,0,0,0) 100%)',
+};
 
 export default function Board() {
   const fen              = useChessStore((s) => s.fen);
@@ -48,8 +56,8 @@ export default function Board() {
     computeBoardSize(window.innerWidth, window.innerHeight),
   );
 
-  const resizeTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const hoverTimer   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resizeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const handleResize = () => {
@@ -58,7 +66,6 @@ export default function Board() {
         setBoardSize(computeBoardSize(window.innerWidth, window.innerHeight));
       }, 100);
     };
-
     window.addEventListener('resize', handleResize);
     return () => {
       window.removeEventListener('resize', handleResize);
@@ -69,33 +76,30 @@ export default function Board() {
 
   const handleSquareClick = useCallback(
     ({ square }: { square: string }) => {
-      const { selectedSquare, optionSquares: opts } = useChessStore.getState();
-      if (selectedSquare && opts[square]) {
-        previewMove(selectedSquare, square);
-        return;
-      }
+      console.log('Board: handleSquareClick', square);
       clearPreview();
       selectSquare(square);
     },
-    [previewMove, clearPreview, selectSquare],
+    [clearPreview, selectSquare],
   );
 
-  // Debounced hover: only fire previewMove after the cursor rests 120 ms
   const handleSquareHover = useCallback(
     ({ square }: { square: string }) => {
       if (hoverTimer.current) clearTimeout(hoverTimer.current);
       hoverTimer.current = setTimeout(() => {
         const { selectedSquare, optionSquares: opts } = useChessStore.getState();
         if (selectedSquare && opts[square]) {
+          console.log('Board: handleSquareHover preview', square);
           previewMove(selectedSquare, square);
         }
-      }, 120);
+      }, 150);
     },
     [previewMove],
   );
 
   const handlePieceDrop = useCallback(
     ({ sourceSquare, targetSquare }: { sourceSquare: string; targetSquare: string | null }) => {
+      console.log('Board: handlePieceDrop', sourceSquare, '->', targetSquare);
       clearPreview();
       if (!targetSquare) return false;
       return makeMove({ from: sourceSquare, to: targetSquare, promotion: 'q' });
@@ -117,22 +121,45 @@ export default function Board() {
     [userArrows, addUserArrow, removeUserArrow],
   );
 
-  const combinedSquares: Record<string, React.CSSProperties> = {
-    ...lastMoveSquares,
-    ...optionSquares,
-  };
-
-  if (checkSquare) {
-    combinedSquares[checkSquare] = {
-      background:
-        'radial-gradient(ellipse at center, rgba(255,0,0,0.55) 0%, rgba(255,50,50,0.2) 60%, rgba(255,0,0,0) 100%)',
+  const combinedSquares = useMemo(() => {
+    const combined: Record<string, React.CSSProperties> = {
+      ...lastMoveSquares,
+      ...optionSquares,
     };
-  }
+    if (checkSquare) {
+      combined[checkSquare] = CHECK_STYLE;
+    }
+    return combined;
+  }, [lastMoveSquares, optionSquares, checkSquare]);
 
-  const allArrows = [
+  const allArrows = useMemo(() => [
     ...customArrows.map(([start, end, color]) => ({ startSquare: start, endSquare: end, color })),
-    ...userArrows.map(([start, end, color]) => ({ startSquare: start, endSquare: end, color })),
-  ];
+    ...userArrows.map(([start,  end, color]) => ({ startSquare: start, endSquare: end, color })),
+  ], [customArrows, userArrows]);
+
+  const chessboardOptions = useMemo(() => ({
+    id: 'main-board',
+    position: fen,
+    boardOrientation,
+    onPieceDrop: handlePieceDrop,
+    onSquareClick: handleSquareClick,
+    onMouseOverSquare: handleSquareHover,
+    onSquareRightClick: handleSquareRightClick,
+    squareStyles: combinedSquares,
+    arrows: allArrows,
+    lightSquareStyle: LIGHT_SQUARE_STYLE,
+    darkSquareStyle:  DARK_SQUARE_STYLE,
+    boardStyle: BOARD_STYLE,
+    animationDurationInMs: 150,
+    showAnimations: true,
+    allowDragging: true,
+    allowDrawingArrows: true,
+    clearArrowsOnPositionChange: true,
+    showNotation: true,
+  }), [
+    fen, boardOrientation, handlePieceDrop, handleSquareClick,
+    handleSquareHover, handleSquareRightClick, combinedSquares, allArrows
+  ]);
 
   return (
     <div
@@ -141,31 +168,7 @@ export default function Board() {
       role="region"
       aria-label="Chess board"
     >
-      <Chessboard
-        options={{
-          id: 'main-board',
-          position: fen,
-          boardOrientation,
-          onPieceDrop: handlePieceDrop,
-          onSquareClick: handleSquareClick,
-          onMouseOverSquare: handleSquareHover,
-          onSquareRightClick: handleSquareRightClick,
-          squareStyles: combinedSquares,
-          arrows: allArrows,
-          lightSquareStyle: { backgroundColor: '#a0aab4' },
-          darkSquareStyle:  { backgroundColor: '#556b7a' },
-          boardStyle: {
-            borderRadius: '6px',
-            boxShadow: '0 8px 40px rgba(0,0,0,0.6), 0 0 80px rgba(0,255,136,0.05)',
-          },
-          animationDurationInMs: 200,
-          showAnimations: true,
-          allowDragging: true,
-          allowDrawingArrows: true,
-          clearArrowsOnPositionChange: true,
-          showNotation: true,
-        }}
-      />
+      <Chessboard options={chessboardOptions} />
     </div>
   );
 }

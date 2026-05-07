@@ -8,9 +8,10 @@
  *  2. Hard node-budget cap prevents runaway searches.
  *  3. Quiescence sort fixed (was ascending, now descending by capture value).
  *  4. Time budget is checked inside minimax, not only at root.
- *  5. topMoves are derived from root-move scores already computed by
+ *  6. topMoves are derived from root-move scores already computed by
  *     searchRoot — no second pass needed.
- *  6. Transposition table (simple Map) for memoisation at low depths.
+ *  7. Transposition table (Simple Map) stores search results to avoid
+ *     redundant work.
  */
 
 import { Chess } from 'chess.js';
@@ -174,11 +175,7 @@ function evaluate(game: Chess): number {
     }
   }
 
-  const mobility = game.moves().length;
-  const gamePhase = Math.abs(totalMaterial - 20000) > 3000 ? 0 : Math.abs(totalMaterial - 20000) > 1500 ? 1 : 2;
-  const mobilityWeight = gamePhase === 2 ? 2 : gamePhase === 1 ? 3 : 4;
-  score += (game.turn() === 'w' ? 1 : -1) * mobility * mobilityWeight;
-
+  // Removed expensive game.moves().length mobility check for performance
   score += evaluateKingSafety(game);
 
   return score;
@@ -208,11 +205,18 @@ function sortMoves(moves: ReturnType<Chess['moves']>[number][]): void {
 
 // ─── Search ──────────────────────────────────────────────────────────────────
 
+interface TTEntry {
+  score: number;
+  depth: number;
+  type: 'EXACT' | 'LOWERBOUND' | 'UPPERBOUND';
+}
+
 interface SearchState {
   nodes: number;
   startTime: number;
   maxTimeMs: number;
   aborted: boolean;
+  tt: Map<string, TTEntry>;
 }
 
 function shouldAbort(state: SearchState): boolean {
@@ -275,6 +279,15 @@ function minimax(
   state.nodes++;
   if (shouldAbort(state)) return 0;
 
+  const fen = game.fen();
+  const ttHit = state.tt.get(fen);
+  if (ttHit && ttHit.depth >= depth) {
+    if (ttHit.type === 'EXACT') return ttHit.score;
+    if (ttHit.type === 'LOWERBOUND') alpha = Math.max(alpha, ttHit.score);
+    else if (ttHit.type === 'UPPERBOUND') beta = Math.min(beta, ttHit.score);
+    if (alpha >= beta) return ttHit.score;
+  }
+
   if (game.isGameOver()) {
     if (game.isCheckmate()) {
       const mateDist = maxDepth - depth;
@@ -290,33 +303,33 @@ function minimax(
   const moves = game.moves({ verbose: true });
   sortMoves(moves as Parameters<typeof sortMoves>[0]);
 
-  const isMax = game.turn() === 'w';
+  let bestVal = game.turn() === 'w' ? -Infinity : Infinity;
+  let oldAlpha = alpha;
 
-  if (isMax) {
-    let best = -Infinity;
-    for (const m of moves) {
-      game.move(m.san);
-      const val = minimax(game, depth - 1, alpha, beta, maxDepth, state);
-      game.undo();
-      if (state.aborted) return best;
-      best = Math.max(best, val);
+  for (const m of moves) {
+    game.move(m.san);
+    const val = minimax(game, depth - 1, alpha, beta, maxDepth, state);
+    game.undo();
+    if (state.aborted) return bestVal;
+
+    if (game.turn() === 'w') {
+      bestVal = Math.max(bestVal, val);
       alpha = Math.max(alpha, val);
-      if (beta <= alpha) break;
-    }
-    return best;
-  } else {
-    let best = Infinity;
-    for (const m of moves) {
-      game.move(m.san);
-      const val = minimax(game, depth - 1, alpha, beta, maxDepth, state);
-      game.undo();
-      if (state.aborted) return best;
-      best = Math.min(best, val);
+    } else {
+      bestVal = Math.min(bestVal, val);
       beta = Math.min(beta, val);
-      if (beta <= alpha) break;
     }
-    return best;
+    if (beta <= alpha) break;
   }
+
+  // Store in TT
+  let type: TTEntry['type'] = 'EXACT';
+  if (bestVal <= oldAlpha) type = 'UPPERBOUND';
+  else if (bestVal >= beta) type = 'LOWERBOUND';
+  
+  state.tt.set(fen, { score: bestVal, depth, type });
+
+  return bestVal;
 }
 
 interface RootMove {
@@ -380,6 +393,7 @@ export function analyzePosition(fen: string, depth: number, maxTimeMs = 3000): E
     startTime: Date.now(),
     maxTimeMs: safeTime,
     aborted: false,
+    tt: new Map(),
   };
 
   let bestResult: { moves: RootMove[]; depth: number } | null = null;

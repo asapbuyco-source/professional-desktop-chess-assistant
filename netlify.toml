@@ -2,98 +2,20 @@
 # Deploy with: netlify deploy --prod --dir=dist
 
 [build]
-  # Build command
   command = "npm install && npm run build"
-  # Directory to publish
   publish = "dist"
-  # Build environment
-  environment = { NODE_VERSION = "18.17.1" }
 
+# FIX: Merged inline environment = { NODE_VERSION = "18.17.1" } from [build]
+# into this single [build.environment] section. TOML does not allow defining
+# the same key both inline and as a subtable header — that was the parse error.
 [build.environment]
-  # Production environment
+  NODE_VERSION = "18.17.1"
   NODE_ENV = "production"
   VITE_APP_ENV = "production"
   VITE_APP_VERSION = "1.0.0"
 
-# Redirect rules for SPA (Single Page Application)
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
+# ── Build processing ──────────────────────────────────────────────────────────
 
-# Cache headers for static assets
-[[headers]]
-  for = "/assets/*"
-  [headers.values]
-    Cache-Control = "public, max-age=31536000, immutable"
-    ETag = "W/\"{{fileHash}}\""
-
-# Cache headers for HTML
-[[headers]]
-  for = "/*.html"
-  [headers.values]
-    Cache-Control = "public, max-age=3600"
-
-# Cache headers for service worker
-[[headers]]
-  for = "/sw.js"
-  [headers.values]
-    Service-Worker-Allowed = "/"
-    Cache-Control = "public, max-age=86400"
-
-# Cache headers for manifest
-[[headers]]
-  for = "/manifest.json"
-  [headers.values]
-    Content-Type = "application/manifest+json"
-    Cache-Control = "public, max-age=86400"
-
-# Security headers for all requests
-[[headers]]
-  for = "/*"
-  [headers.values]
-    # CSP - Content Security Policy
-    Content-Security-Policy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self'; connect-src 'self'"
-    # Security headers
-    X-Content-Type-Options = "nosniff"
-    X-Frame-Options = "DENY"
-    X-XSS-Protection = "1; mode=block"
-    Referrer-Policy = "strict-origin-when-cross-origin"
-    Permissions-Policy = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
-    # HSTS (optional - uncomment if using custom domain)
-    # Strict-Transport-Security = "max-age=31536000; includeSubDomains; preload"
-    # Allow service worker
-    Service-Worker-Allowed = "/"
-
-# Context-specific configurations
-[context.production]
-  command = "npm install && npm run build"
-  environment = { NODE_ENV = "production", VITE_APP_ENV = "production" }
-
-[context.deploy-preview]
-  command = "npm install && npm run build"
-  environment = { NODE_ENV = "production", VITE_APP_ENV = "production" }
-
-[context.branch-deploy]
-  command = "npm install && npm run build"
-  environment = { NODE_ENV = "development", VITE_APP_ENV = "development" }
-
-# Functions configuration (if needed in future)
-[functions]
-  directory = "netlify/functions"
-  # node_bundler = "esbuild"
-
-# Form handling (optional)
-# [[redirects]]
-#   from = "/api/*"
-#   to = "/.netlify/functions/:splat"
-#   status = 200
-
-# Analytics
-# [analytics]
-#   enabled = true
-
-# Site metadata
 [build.processing]
   skip_processing = false
 
@@ -108,20 +30,64 @@
 [build.processing.html]
   pretty_urls = true
 
-# Environment variables (can also be set in Netlify UI)
-# Add sensitive vars in Netlify dashboard UI, not here
-# [env]
-#   API_KEY = "your-api-key"
+# ── Context overrides ─────────────────────────────────────────────────────────
 
-# Plugins (optional)
-# [[plugins]]
-#   package = "netlify-plugin-lighthouse"
-#   [plugins.inputs]
-#     output_path = "lighthouse"
-#     threshold = 0.8
+[context.production]
+  command = "npm install && npm run build"
+  environment = { NODE_ENV = "production", VITE_APP_ENV = "production" }
 
-# DNS settings (if using Netlify DNS)
-# [[dns]]
-#   name = "example.com"
-#   type = "A"
-#   value = "75.2.60.5"
+[context.deploy-preview]
+  command = "npm install && npm run build"
+  environment = { NODE_ENV = "production", VITE_APP_ENV = "production" }
+
+[context.branch-deploy]
+  command = "npm install && npm run build"
+  environment = { NODE_ENV = "development", VITE_APP_ENV = "development" }
+
+# ── SPA redirect ─────────────────────────────────────────────────────────────
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# ── Cache headers ─────────────────────────────────────────────────────────────
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Service-Worker-Allowed = "/"
+    Cache-Control = "public, max-age=86400"
+
+[[headers]]
+  for = "/manifest.json"
+  [headers.values]
+    Content-Type = "application/manifest+json"
+    Cache-Control = "public, max-age=86400"
+
+# ── Security headers ──────────────────────────────────────────────────────────
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # CSP: added worker-src 'self' for the engine Web Worker.
+    # blob: allows Vite dev-mode worker URLs in some configurations.
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self'; connect-src 'self'"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    X-XSS-Protection = "1; mode=block"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    # FIX: removed microphone=() — that blocked the voice-input feature.
+    # self allows microphone access only from the same origin.
+    Permissions-Policy = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(self), payment=(), usb=()"
+    Service-Worker-Allowed = "/"

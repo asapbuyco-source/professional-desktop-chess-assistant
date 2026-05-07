@@ -172,7 +172,7 @@ export const useChessStore = create<ChessStore>((set, get) => ({
   showImportModal: false,
   importType: 'pgn',
   settings: {
-    engineDepth: 3,
+    engineDepth: 2,
     showArrows: true,
     showLegalMoves: true,
     animationSpeed: 200,
@@ -232,7 +232,7 @@ export const useChessStore = create<ChessStore>((set, get) => ({
 
       // Kick off worker analysis — never blocks the main thread
       const fen = game.fen();
-      requestAnalysis(fen, settings.engineDepth, 3000, (analysis) => {
+      requestAnalysis(fen, settings.engineDepth, 2000, (analysis) => {
         // Guard: make sure the position hasn't changed since we started
         if (get().fen !== fen) return;
         const arrows = getAnalysisArrows(analysis, settings.showArrows);
@@ -279,7 +279,7 @@ export const useChessStore = create<ChessStore>((set, get) => ({
       }));
 
       const fen = game.fen();
-      requestAnalysis(fen, settings.engineDepth, 3000, (analysis) => {
+      requestAnalysis(fen, settings.engineDepth, 2000, (analysis) => {
         if (get().fen !== fen) return;
         const arrows = getAnalysisArrows(analysis, settings.showArrows);
         set({ engineAnalysis: analysis, isAnalyzing: false, customArrows: arrows });
@@ -321,7 +321,7 @@ export const useChessStore = create<ChessStore>((set, get) => ({
       }));
 
       const fen = game.fen();
-      requestAnalysis(fen, settings.engineDepth, 3000, (analysis) => {
+      requestAnalysis(fen, settings.engineDepth, 2000, (analysis) => {
         if (get().fen !== fen) return;
         const arrows = getAnalysisArrows(analysis, settings.showArrows);
         set({ engineAnalysis: analysis, isAnalyzing: false, customArrows: arrows });
@@ -555,7 +555,7 @@ export const useChessStore = create<ChessStore>((set, get) => ({
       });
 
       const fen = game.fen();
-      requestAnalysis(fen, settings.engineDepth, 3000, (analysis) => {
+      requestAnalysis(fen, settings.engineDepth, 2000, (analysis) => {
         if (get().fen !== fen) return;
         const arrows = getAnalysisArrows(analysis, settings.showArrows);
         set({ engineAnalysis: analysis, isAnalyzing: false, customArrows: arrows });
@@ -600,7 +600,7 @@ export const useChessStore = create<ChessStore>((set, get) => ({
         isAnalyzing: true,
       });
 
-      requestAnalysis(fen, settings.engineDepth, 3000, (analysis) => {
+      requestAnalysis(fen, settings.engineDepth, 2000, (analysis) => {
         if (get().fen !== fen) return;
         const arrows = getAnalysisArrows(analysis, settings.showArrows);
         set({ engineAnalysis: analysis, isAnalyzing: false, customArrows: arrows });
