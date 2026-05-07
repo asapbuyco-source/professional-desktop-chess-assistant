@@ -87,6 +87,8 @@ export default function RightPanel() {
   const setEngineDepth = useChessStore((s) => s.setEngineDepth);
   const gameStatus     = useChessStore((s) => s.gameStatus);
   const previewAnalysis = useChessStore((s) => s.previewAnalysis);
+  const userSide       = useChessStore((s) => s.userSide);
+  const turn           = useChessStore((s) => s.turn);
 
   const eval_  = engineAnalysis?.evaluation ?? 0;
   const isMate = engineAnalysis?.isMate     ?? false;
@@ -119,13 +121,32 @@ export default function RightPanel() {
             <option value={2}>Depth 2</option>
             <option value={3}>Depth 3</option>
             <option value={4}>Depth 4</option>
+            <option value={5}>Depth 5</option>
+            <option value={6}>Depth 6</option>
+            <option value={8}>Depth 8 (Pro)</option>
           </select>
         </div>
 
-        {/* Game Status */}
-        <div className="bg-[#0a0c14] rounded-lg px-3 py-2 mb-2">
-          <p className="text-xs text-white/80" role="status" aria-live="polite">
-            {gameStatus}
+        {/* Assistant Status */}
+        <div className={`rounded-lg px-3 py-2 mb-2 transition-colors ${
+          (userSide !== 'none' && turn === userSide) 
+            ? 'bg-[#00ff88]/10 border border-[#00ff88]/20' 
+            : 'bg-[#0a0c14] border border-white/5'
+        }`}>
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] text-white/40 uppercase tracking-tighter font-bold">
+              Status
+            </p>
+            {isAnalyzing && <div className="thinking-indicator w-1 h-1 rounded-full bg-[#00ff88]" />}
+          </div>
+          <p className={`text-xs font-medium mt-0.5 ${
+            (userSide !== 'none' && turn === userSide) ? 'text-[#00ff88]' : 'text-white/80'
+          }`} role="status" aria-live="polite">
+            {userSide === 'none' 
+              ? gameStatus 
+              : turn === userSide 
+                ? '🎯 Your turn: Calculating best move...' 
+                : '⏳ Waiting for opponent move...'}
           </p>
         </div>
 

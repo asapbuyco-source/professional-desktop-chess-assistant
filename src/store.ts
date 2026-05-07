@@ -50,6 +50,10 @@ interface ChessStore {
   history: string[];
   pgn: string;
   turn: 'w' | 'b';
+  gameStatus: string;
+  isAnalyzing: boolean;
+  engineAnalysis: EngineAnalysis | null;
+  userSide: 'w' | 'b' | 'none';
   boardOrientation: 'white' | 'black';
   selectedSquare: string | null;
   optionSquares: Record<string, React.CSSProperties>;
@@ -57,15 +61,12 @@ interface ChessStore {
   checkSquare: string | null;
   customArrows: [string, string, string][];
   userArrows: [string, string, string][];
-  engineAnalysis: EngineAnalysis | null;
-  isAnalyzing: boolean;
   moveInput: string;
   moveSuggestions: string[];
   selectedPieceType: PieceType | null;
   builderDestinations: string[];
   builderHighlightSquares: Record<string, React.CSSProperties>;
   openingName: string;
-  gameStatus: string;
   redoStack: MoveObject[];
   showSettings: boolean;
   showImportModal: boolean;
@@ -89,6 +90,7 @@ interface ChessStore {
   setEngineDepth: (depth: number) => void;
   toggleSettings: () => void;
   toggleImportModal: (type?: 'pgn' | 'fen') => void;
+  setUserSide: (side: 'w' | 'b' | 'none') => void;
   updateSettings: (s: Partial<GameSettings>) => void;
   importPgn: (pgn: string) => boolean;
   importFen: (fen: string) => boolean;
@@ -151,6 +153,10 @@ export const useChessStore = create<ChessStore>((set, get) => ({
   history: [],
   pgn: '',
   turn: 'w' as const,
+  gameStatus: '⬜ White to move',
+  isAnalyzing: false,
+  engineAnalysis: null,
+  userSide: 'none',
   boardOrientation: 'white' as const,
   selectedSquare: null,
   optionSquares: {},
@@ -158,15 +164,12 @@ export const useChessStore = create<ChessStore>((set, get) => ({
   checkSquare: null,
   customArrows: [],
   userArrows: [],
-  engineAnalysis: null,
-  isAnalyzing: false,
   moveInput: '',
   moveSuggestions: [],
   selectedPieceType: null,
   builderDestinations: [],
   builderHighlightSquares: {},
   openingName: 'Starting Position',
-  gameStatus: '⬜ White to move',
   redoStack: [],
   showSettings: false,
   showImportModal: false,
@@ -230,14 +233,20 @@ export const useChessStore = create<ChessStore>((set, get) => ({
         else                               playMoveSound();
       }
 
-      // Kick off worker analysis — never blocks the main thread
+      // Kick off worker analysis — only if it's the user's side (or none selected)
       const fen = game.fen();
-      requestAnalysis(fen, settings.engineDepth, 2000, (analysis) => {
-        // Guard: make sure the position hasn't changed since we started
-        if (get().fen !== fen) return;
-        const arrows = getAnalysisArrows(analysis, settings.showArrows);
-        set({ engineAnalysis: analysis, isAnalyzing: false, customArrows: arrows });
-      });
+      const userSide = get().userSide;
+      
+      if (userSide === 'none' || turn === userSide) {
+        requestAnalysis(fen, settings.engineDepth, 10000, (analysis) => {
+          if (get().fen !== fen) return;
+          const arrows = getAnalysisArrows(analysis, settings.showArrows);
+          set({ engineAnalysis: analysis, isAnalyzing: false, customArrows: arrows });
+        });
+      } else {
+        // Clear analysis arrows during opponent's turn to focus on user
+        set({ engineAnalysis: null, isAnalyzing: false, customArrows: [] });
+      }
 
       return true;
     } catch {
@@ -493,6 +502,24 @@ export const useChessStore = create<ChessStore>((set, get) => ({
       optionSquares: {},
     });
     return false;
+  },
+
+  // ── setUserSide ───────────────────────────────────────────────────────────
+  setUserSide: (side: 'w' | 'b' | 'none') => {
+    const orientation = side === 'b' ? 'black' : 'white';
+    set({ userSide: side, boardOrientation: orientation });
+    
+    // Trigger analysis if it's now the user's turn
+    const { game, settings, turn } = get();
+    if (side !== 'none' && turn === side) {
+      const fen = game.fen();
+      set({ isAnalyzing: true });
+      requestAnalysis(fen, settings.engineDepth, 10000, (analysis) => {
+        if (get().fen !== fen) return;
+        const arrows = getAnalysisArrows(analysis, settings.showArrows);
+        set({ engineAnalysis: analysis, isAnalyzing: false, customArrows: arrows });
+      });
+    }
   },
 
   // ── setEngineDepth ────────────────────────────────────────────────────────

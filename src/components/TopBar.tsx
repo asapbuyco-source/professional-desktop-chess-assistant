@@ -140,16 +140,21 @@ function SettingsModal() {
                 id="engine-depth"
                 type="range" 
                 min={1} 
-                max={4} 
+                max={8} 
                 value={settings.engineDepth}
                 onChange={(e) => setEngineDepth(Number(e.target.value))}
                 className="flex-1 accent-[#00ff88]"
                 aria-valuemin={1}
-                aria-valuemax={4}
+                aria-valuemax={8}
                 aria-valuenow={settings.engineDepth}
               />
               <span className="text-sm text-[#00ff88] font-mono w-6">{settings.engineDepth}</span>
             </div>
+            {settings.engineDepth >= 7 && (
+              <p className="text-[10px] text-[#00ff88]/60 italic mt-1 ml-1">
+                Pro Search: Bot will be significantly stronger but takes longer to think.
+              </p>
+            )}
           </div>
 
           <ToggleSetting label="Show Engine Arrows" value={settings.showArrows} onChange={(v) => updateSettings({ showArrows: v })} />
@@ -180,7 +185,11 @@ function ToggleSetting({ label, value, onChange }: { label: string; value: boole
 }
 
 export default function TopBar({ onMenuClick }: { onMenuClick?: () => void }) {
-  const { newGame, toggleImportModal, toggleSettings, pgn, fen, undoMove, showImportModal, showSettings } = useChessStore();
+  const { 
+    newGame, toggleImportModal, toggleSettings, 
+    undoMove, showImportModal, showSettings,
+    userSide, setUserSide
+  } = useChessStore();
   const [copied, setCopied] = useState('');
 
   const copyToClipboard = (text: string, label: string) => {
@@ -221,29 +230,66 @@ export default function TopBar({ onMenuClick }: { onMenuClick?: () => void }) {
           </div>
         </div>
 
-        {/* Center: Actions */}
-        <div className="hidden md:flex items-center gap-1 flex-shrink-0">
-          <button
-            onClick={newGame}
-            className="px-2 md:px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#1a1f2e] text-white/70 hover:text-white hover:bg-[#222840] border border-white/5 transition-all whitespace-nowrap"
-            title="Start a new game (Ctrl+N)"
-          >
-            ♟ New
-          </button>
-          <button
-            onClick={() => undoMove()}
-            className="px-2 md:px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#1a1f2e] text-white/70 hover:text-white hover:bg-[#222840] border border-white/5 transition-all whitespace-nowrap"
-            title="Undo last move (Ctrl+Z)"
-          >
-            ↩ Undo
-          </button>
-          <button
-            onClick={() => toggleImportModal('pgn')}
-            className="px-2 md:px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#1a1f2e] text-white/70 hover:text-white hover:bg-[#222840] border border-white/5 transition-all whitespace-nowrap hidden lg:block"
-            title="Import PGN or FEN"
-          >
-            📥 Import
-          </button>
+        {/* Center: Assistant Side Selector & Actions */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {/* Side Selector */}
+          <div className="hidden md:flex items-center bg-[#0a0c14] rounded-lg p-0.5 border border-white/5">
+            <button 
+              onClick={() => setUserSide('w')}
+              className={`px-2.5 py-1 rounded-md text-[9px] font-bold tracking-tight transition-all ${
+                userSide === 'w' 
+                  ? 'bg-[#00ff88] text-black shadow-[0_0_10px_rgba(0,255,136,0.3)]' 
+                  : 'text-white/40 hover:text-white'
+              }`}
+            >
+              PLAY WHITE
+            </button>
+            <button 
+              onClick={() => setUserSide('b')}
+              className={`px-2.5 py-1 rounded-md text-[9px] font-bold tracking-tight transition-all ${
+                userSide === 'b' 
+                  ? 'bg-[#00ff88] text-black shadow-[0_0_10px_rgba(0,255,136,0.3)]' 
+                  : 'text-white/40 hover:text-white'
+              }`}
+            >
+              PLAY BLACK
+            </button>
+            <button 
+              onClick={() => setUserSide('none')}
+              className={`px-2 py-1 rounded-md text-[9px] font-bold transition-all ${
+                userSide === 'none' 
+                  ? 'text-[#00ff88]' 
+                  : 'text-white/20 hover:text-white'
+              }`}
+              title="Analyzer Mode (Calculate for both sides)"
+            >
+              OFF
+            </button>
+          </div>
+
+          <div className="hidden md:flex items-center gap-1">
+            <button
+              onClick={newGame}
+              className="px-2 md:px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#1a1f2e] text-white/70 hover:text-white hover:bg-[#222840] border border-white/5 transition-all whitespace-nowrap"
+              title="Start a new game (Ctrl+N)"
+            >
+              ♟ New
+            </button>
+            <button
+              onClick={() => undoMove()}
+              className="px-2 md:px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#1a1f2e] text-white/70 hover:text-white hover:bg-[#222840] border border-white/5 transition-all whitespace-nowrap"
+              title="Undo last move (Ctrl+Z)"
+            >
+              ↩ Undo
+            </button>
+            <button
+              onClick={() => toggleImportModal('pgn')}
+              className="px-2 md:px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#1a1f2e] text-white/70 hover:text-white hover:bg-[#222840] border border-white/5 transition-all whitespace-nowrap hidden lg:block"
+              title="Import PGN or FEN"
+            >
+              📥 Import
+            </button>
+          </div>
         </div>
 
         {/* Export buttons - responsive */}
