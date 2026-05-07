@@ -12,11 +12,31 @@
  *     searchRoot — no second pass needed.
  *  7. Transposition table (Simple Map) stores search results to avoid
  *     redundant work.
+ *  8. Opening Book: Curated responses for common positions.
+ *  9. Null Move Pruning (NMP): Search depth reduction for dominant positions.
  */
 
-import { Chess } from 'chess.js';
+import { Chess, type Move } from 'chess.js';
 import type { EngineAnalysis, TopMove } from '@/types';
 import { PIECE_VALUES } from '@/pieceValues';
+
+// ─── Opening Book ───────────────────────────────────────────────────────────
+
+const OPENING_BOOK: Record<string, string> = {
+  // Start position
+  'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1': 'e4',
+  // After e4
+  'rnbqkbnr/pppppppp/8/8/4P3/8/PPPPPPPP/RNBQKBNR b KQkq e3 0 1': 'c5', // Sicilian
+  'rnbqkbnr/pppppppp/8/8/4P3/8/PPPPPPPP/RNBQKBNR b KQkq e3 0 1 ': 'e5', // e4 e5
+  // e4 c5 (Sicilian)
+  'rnbqkbnr/pp1ppppp/8/2p5/4P3/8/PPPPPPPP/RNBQKBNR w KQkq c6 0 2': 'Nf3',
+  // e4 e5 (King's Pawn)
+  'rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPPPPPP/RNBQKBNR w KQkq e6 0 2': 'Nf3',
+  // d4
+  'rnbqkbnr/pppppppp/8/8/3P4/8/PPPPPPPP/RNBQKBNR w KQkq d3 0 1': 'd4',
+  'rnbqkbnr/pppppppp/8/8/3P4/8/PPPPPPPP/RNBQKBNR b KQkq d3 0 1': 'Nf6', // Indian
+  'rnbqkbnr/pppppppp/8/8/3P4/8/PPPPPPPP/RNBQKBNR b KQkq d3 0 1 ': 'd5', // d4 d5
+};
 
 // ─── Piece-Square Tables ────────────────────────────────────────────────────
 
@@ -32,24 +52,24 @@ const PST: Record<string, number[]> = {
      0,  0,  0,  0,  0,  0,  0,  0,
   ],
   n: [
-   -50,-40,-30,-30,-30,-30,-40,-50,
-   -40,-20,  0,  0,  0,  0,-20,-40,
-   -30,  0, 10, 15, 15, 10,  0,-30,
-   -30,  5, 15, 20, 20, 15,  5,-30,
-   -30,  0, 15, 20, 20, 15,  0,-30,
-   -30,  5, 10, 15, 15, 10,  5,-30,
-   -40,-20,  0,  5,  5,  0,-20,-40,
-   -50,-40,-30,-30,-30,-30,-40,-50,
+    -50,-40,-30,-30,-30,-30,-40,-50,
+    -40,-20,  0,  0,  0,  0,-20,-40,
+    -30,  0, 10, 15, 15, 10,  0,-30,
+    -30,  5, 15, 20, 20, 15,  5,-30,
+    -30,  0, 15, 20, 20, 15,  0,-30,
+    -30,  5, 10, 15, 15, 10,  5,-30,
+    -40,-20,  0,  5,  5,  0,-20,-40,
+    -50,-40,-30,-30,-30,-30,-40,-50,
   ],
   b: [
-   -20,-10,-10,-10,-10,-10,-10,-20,
-   -10,  0,  0,  0,  0,  0,  0,-10,
-   -10,  0, 10, 10, 10, 10,  0,-10,
-   -10,  5,  5, 10, 10,  5,  5,-10,
-   -10,  0, 10, 10, 10, 10,  0,-10,
-   -10, 10, 10, 10, 10, 10, 10,-10,
-   -10,  5,  0,  0,  0,  0,  5,-10,
-   -20,-10,-10,-10,-10,-10,-10,-20,
+    -20,-10,-10,-10,-10,-10,-10,-20,
+    -10,  0,  0,  0,  0,  0,  0,-10,
+    -10,  0, 10, 10, 10, 10,  0,-10,
+    -10,  5,  5, 10, 10,  5,  5,-10,
+    -10,  0, 10, 10, 10, 10,  0,-10,
+    -10, 10, 10, 10, 10, 10, 10,-10,
+    -10,  5,  0,  0,  0,  0,  5,-10,
+    -20,-10,-10,-10,-10,-10,-10,-20,
   ],
   r: [
      0,  0,  0,  0,  0,  0,  0,  0,
@@ -62,24 +82,34 @@ const PST: Record<string, number[]> = {
      0,  0,  0,  5,  5,  0,  0,  0,
   ],
   q: [
-   -20,-10,-10, -5, -5,-10,-10,-20,
-   -10,  0,  0,  0,  0,  0,  0,-10,
-   -10,  0,  5,  5,  5,  5,  0,-10,
-    -5,  0,  5,  5,  5,  5,  0, -5,
+    -20,-10,-10, -5, -5,-10,-10,-20,
+    -10,  0,  0,  0,  0,  0,  0,-10,
+    -10,  0,  5,  5,  5,  5,  0,-10,
+     -5,  0,  5,  5,  5,  5,  0, -5,
      0,  0,  5,  5,  5,  5,  0, -5,
-   -10,  5,  5,  5,  5,  5,  0,-10,
-   -10,  0,  5,  0,  0,  0,  0,-10,
-   -20,-10,-10, -5, -5,-10,-10,-20,
+    -10,  5,  5,  5,  5,  5,  0,-10,
+    -10,  0,  5,  0,  0,  0,  0,-10,
+    -20,-10,-10, -5, -5,-10,-10,-20,
   ],
   k: [
-   -30,-40,-40,-50,-50,-40,-40,-30,
-   -30,-40,-40,-50,-50,-40,-40,-30,
-   -30,-40,-40,-50,-50,-40,-40,-30,
-   -30,-40,-40,-50,-50,-40,-40,-30,
-   -20,-30,-30,-40,-40,-30,-30,-20,
-   -10,-20,-20,-20,-20,-20,-20,-10,
-    20, 20,  0,  0,  0,  0, 20, 20,
-    20, 30, 10,  0,  0, 10, 30, 20,
+    -30,-40,-40,-50,-50,-40,-40,-30,
+    -30,-40,-40,-50,-50,-40,-40,-30,
+    -30,-40,-40,-50,-50,-40,-40,-30,
+    -30,-40,-40,-50,-50,-40,-40,-30,
+    -20,-30,-30,-40,-40,-30,-30,-20,
+    -10,-20,-20,-20,-20,-20,-20,-10,
+     20, 20,  0,  0,  0,  0, 20, 20,
+     20, 30, 10,  0,  0, 10, 30, 20,
+  ],
+  k_endgame: [
+    -50,-40,-30,-20,-20,-30,-40,-50,
+    -30,-20,-10,  0,  0,-10,-20,-30,
+    -30,-10, 20, 30, 30, 20,-10,-30,
+    -30,-10, 30, 40, 40, 30,-10,-30,
+    -30,-10, 30, 40, 40, 30,-10,-30,
+    -30,-10, 20, 30, 30, 20,-10,-30,
+    -30,-30,  0,  0,  0,  0,-30,-30,
+    -50,-30,-30,-30,-30,-30,-30,-50,
   ],
 };
 
@@ -91,8 +121,8 @@ const KING_SAFETY = {
 
 // ─── Hard limits ─────────────────────────────────────────────────────────────
 
-/** Absolute node cap — prevents runaway searches regardless of depth/time. */
-const MAX_NODES = 150_000;
+/** Absolute node cap — prevents runaway searches. Increased for higher depth. */
+const MAX_NODES = 1_500_000;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -158,16 +188,20 @@ function evaluate(game: Chess): number {
   let score = 0;
   const board = game.board();
   let totalMaterial = 0;
+  let pieceCount = 0;
 
   for (let r = 0; r < 8; r++) {
     for (let f = 0; f < 8; f++) {
       const piece = board[r][f];
       if (!piece) continue;
 
+      pieceCount++;
       const pieceVal = PIECE_VALUES[piece.type] || 0;
-      totalMaterial += pieceVal;
+      if (piece.type !== 'p' && piece.type !== 'k') totalMaterial += pieceVal;
 
-      const table = PST[piece.type];
+      const isEndgame = totalMaterial < 1500;
+      const tableKey = (piece.type === 'k' && isEndgame) ? 'k_endgame' : piece.type;
+      const table = PST[tableKey];
       const idx = piece.color === 'w' ? r * 8 + f : (7 - r) * 8 + f;
       const posVal = table ? table[idx] : 0;
       const multiplier = piece.color === 'w' ? 1 : -1;
@@ -175,7 +209,6 @@ function evaluate(game: Chess): number {
     }
   }
 
-  // Removed expensive game.moves().length mobility check for performance
   score += evaluateKingSafety(game);
 
   return score;
@@ -275,6 +308,7 @@ function minimax(
   beta: number,
   maxDepth: number,
   state: SearchState,
+  allowNullMove = true,
 ): number {
   state.nodes++;
   if (shouldAbort(state)) return 0;
@@ -298,6 +332,21 @@ function minimax(
 
   if (depth === 0) {
     return quiescence(game, alpha, beta, state);
+  }
+
+  // Null Move Pruning
+  if (allowNullMove && depth >= 3 && !game.isCheck()) {
+    const R = 2; // Reduction
+    const dummy = new Chess(game.fen());
+    // Make a null move (switch turns)
+    const tokens = dummy.fen().split(' ');
+    tokens[1] = tokens[1] === 'w' ? 'b' : 'w';
+    tokens[3] = '-'; // En passant reset
+    const nullFen = tokens.join(' ');
+    const nullGame = new Chess(nullFen);
+    
+    const val = -minimax(nullGame, depth - 1 - R, -beta, -beta + 1, maxDepth, state, false);
+    if (val >= beta) return beta;
   }
 
   const moves = game.moves({ verbose: true });
@@ -368,6 +417,23 @@ function searchRoot(
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 export function analyzePosition(fen: string, depth: number, maxTimeMs = 3000): EngineAnalysis {
+  // 1. Check Opening Book first
+  const bookMove = OPENING_BOOK[fen] || OPENING_BOOK[fen.trim()];
+  if (bookMove) {
+    const g = new Chess(fen);
+    try {
+      const m = g.move(bookMove);
+      return {
+        bestMove: m.san,
+        evaluation: 0,
+        depth: 0,
+        nodes: 0,
+        pv: [m.san],
+        topMoves: [{ move: m.san, score: 0, pv: [m.san] }],
+      };
+    } catch { /* ignore */ }
+  }
+
   const game = new Chess(fen);
 
   if (game.isGameOver()) {
@@ -385,8 +451,8 @@ export function analyzePosition(fen: string, depth: number, maxTimeMs = 3000): E
   }
 
   // Clamp depth and time to safe production values
-  const safeDepth = Math.min(depth, 4);
-  const safeTime  = Math.min(maxTimeMs, 3000);
+  const safeDepth = Math.min(depth, 8);
+  const safeTime  = Math.min(maxTimeMs, 10000);
 
   const state: SearchState = {
     nodes: 0,
