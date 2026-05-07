@@ -351,6 +351,17 @@ function negamax(
 
   if (depth <= 0) return quiescence(game, alpha, beta, state);
 
+  // Static eval for pruning decisions
+  const staticEval = evaluate(game);
+
+  // Reverse Futility Pruning (Static Null Move Pruning)
+  // If our position is so good that even after subtracting a margin we exceed beta,
+  // we can safely prune.
+  if (!inCheck && !isRoot && depth <= 3) {
+    const rfpMargin = 120 * depth;
+    if (staticEval - rfpMargin >= beta) return staticEval - rfpMargin;
+  }
+
   // TT probe
   const fen = game.fen();
   const ttHit = state.tt.get(fen);
@@ -412,6 +423,15 @@ function negamax(
     const isCapture = !!m.captured;
     const isPromotion = !!(m as any).promotion;
     const givesCheck = m.san.includes('+');
+
+    // Futility Pruning: near leaf nodes, skip quiet moves that can't raise alpha
+    if (!inCheck && !isCapture && !isPromotion && !givesCheck && depth <= 2 && movesSearched > 0) {
+      const futilityMargin = depth === 1 ? 200 : 500;
+      if (staticEval + futilityMargin <= alpha) {
+        movesSearched++;
+        continue;
+      }
+    }
 
     game.move(m.san);
 
@@ -512,6 +532,38 @@ function searchRoot(
   return results;
 }
 
+function searchRootWithBounds(
+  game: Chess,
+  depth: number,
+  state: SearchState,
+  prevBest: string | null,
+  alpha: number,
+  beta: number,
+): RootMove[] {
+  const moves = game.moves({ verbose: true });
+  const killers = state.killers[0] || [];
+  const scored = moves.map(m => ({
+    move: m,
+    orderScore: scoreMoveForOrdering(m as any, prevBest, killers),
+  }));
+  scored.sort((a, b) => b.orderScore - a.orderScore);
+
+  const results: RootMove[] = [];
+
+  for (const { move: m } of scored) {
+    game.move(m.san);
+    const score = -negamax(game, depth - 1, -beta, -alpha, 1, state, true);
+    game.undo();
+
+    results.push({ san: m.san, from: m.from, to: m.to, score });
+    if (state.aborted && results.length > 1) break;
+    if (score > alpha) alpha = score;
+  }
+
+  results.sort((a, b) => b.score - a.score);
+  return results;
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 export function analyzePosition(fen: string, depth: number, maxTimeMs = 5000): EngineAnalysis {
@@ -545,18 +597,38 @@ export function analyzePosition(fen: string, depth: number, maxTimeMs = 5000): E
 
   let bestResult: { moves: RootMove[]; depth: number } | null = null;
   let prevBest: string | null = null;
+  let prevScore = 0;
 
-  // Iterative deepening
+  // Iterative deepening with aspiration windows
   for (let d = 1; d <= safeDepth; d++) {
     const elapsed = Date.now() - state.startTime;
     if (d > 1 && elapsed > safeTime * 0.6) break;
 
     state.aborted = false;
-    const moves = searchRoot(game, d, state, prevBest);
+
+    let moves: RootMove[];
+
+    if (d >= 4 && bestResult) {
+      // Aspiration window: search a narrow band around previous score
+      const WINDOW = 50;
+      moves = searchRootWithBounds(game, d, state, prevBest, prevScore - WINDOW, prevScore + WINDOW);
+
+      // If the score fell outside the window, re-search with full bounds
+      if (!state.aborted && moves.length > 0) {
+        const bestScore = moves[0].score;
+        if (bestScore <= prevScore - WINDOW || bestScore >= prevScore + WINDOW) {
+          state.aborted = false;
+          moves = searchRoot(game, d, state, prevBest);
+        }
+      }
+    } else {
+      moves = searchRoot(game, d, state, prevBest);
+    }
 
     if (moves.length > 0 && !state.aborted) {
       bestResult = { moves, depth: d };
       prevBest = moves[0].san;
+      prevScore = moves[0].score;
     } else if (moves.length > 0 && state.aborted && !bestResult) {
       // Use partial results if we have nothing else
       bestResult = { moves, depth: d };

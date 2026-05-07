@@ -1,16 +1,8 @@
 /**
- * RightPanel.tsx
- *
- * Fixes vs. original:
- *  1. EvalBar: the bar was filling from the top (absolute top:0) — correct
- *     behaviour is white fills from bottom (positive = more white).
- *     Fixed using `bottom: 0` and inverting the fill direction.
- *  2. Added `export { EvalBar }` at module level (was only exported inline).
- *  3. Granular Zustand selectors to prevent whole-store re-renders.
- *  4. Replaced <select> engine depth picker in RightPanel with the same
- *     depth values as the settings modal.
+ * RightPanel.tsx — Engine analysis panel with Quick Move Input for chess.com workflow
  */
 
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useChessStore } from '@/store';
 
@@ -23,7 +15,6 @@ export function EvalBar({
   isMate: boolean;
   mateIn: number | null;
 }) {
-  // Sigmoid to map centipawn → 0-100 %
   const sigmoid = (x: number) => 1 / (1 + Math.exp(-x * 0.003));
   let whitePct = sigmoid(evaluation) * 100;
 
@@ -53,12 +44,10 @@ export function EvalBar({
         {evalText}
       </span>
 
-      {/* Bar container — dark background = black, light fill = white */}
       <div
         className="w-6 flex-1 rounded-full overflow-hidden relative bg-[#333]"
         style={{ minHeight: 160 }}
       >
-        {/* White's advantage fills from BOTTOM */}
         <motion.div
           className="absolute bottom-0 w-full rounded-full bg-[#e8e8e8]"
           animate={{ height: `${whitePct}%` }}
@@ -89,16 +78,104 @@ export default function RightPanel() {
   const previewAnalysis = useChessStore((s) => s.previewAnalysis);
   const userSide       = useChessStore((s) => s.userSide);
   const turn           = useChessStore((s) => s.turn);
+  const makeMove       = useChessStore((s) => s.makeMove);
+
+  const [moveText, setMoveText] = useState('');
+  const [moveError, setMoveError] = useState('');
 
   const eval_  = engineAnalysis?.evaluation ?? 0;
   const isMate = engineAnalysis?.isMate     ?? false;
   const mateIn = engineAnalysis?.mateIn     ?? null;
-
   const previewEval = previewAnalysis?.evaluation ?? null;
+
+  const handleQuickMove = () => {
+    const trimmed = moveText.trim();
+    if (!trimmed) return;
+    setMoveError('');
+    const success = makeMove(trimmed);
+    if (success) {
+      setMoveText('');
+    } else {
+      setMoveError(`"${trimmed}" is not a legal move`);
+      setTimeout(() => setMoveError(''), 2000);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-3" style={{ width: 260 }}>
-      {/* Engine Header */}
+
+      {/* ── Quick Move Input (for chess.com workflow) ──────────────────── */}
+      <div className="glass-panel rounded-xl p-3">
+        <label htmlFor="quick-move" className="text-[10px] font-semibold text-white/50 uppercase tracking-wider mb-1.5 block">
+          ⚡ Quick Move Input
+        </label>
+        <div className="flex gap-1.5">
+          <input
+            id="quick-move"
+            type="text"
+            value={moveText}
+            onChange={(e) => { setMoveText(e.target.value); setMoveError(''); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleQuickMove(); }}
+            placeholder="e4, Nf3, O-O..."
+            className="flex-1 bg-[#0a0c14] border border-[#2a3040] rounded-lg px-3 py-1.5 text-sm text-white font-mono placeholder:text-white/20 focus:outline-none focus:border-[#00ff88]/50 transition-colors"
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <button
+            onClick={handleQuickMove}
+            className="px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
+            style={{ background: 'linear-gradient(145deg, #00ff88, #00cc6a)', color: '#07070d' }}
+          >
+            ↵
+          </button>
+        </div>
+        {moveError && (
+          <p className="text-[10px] text-red-400 mt-1" role="alert">{moveError}</p>
+        )}
+      </div>
+
+      {/* ── BEST MOVE Hero Display ────────────────────────────────────── */}
+      <div className="glass-panel rounded-xl p-3">
+        <div className="text-[10px] font-semibold text-white/50 uppercase tracking-wider mb-2">
+          {isAnalyzing ? '🔍 Calculating...' : '🎯 Play This Move'}
+        </div>
+
+        {engineAnalysis?.bestMove ? (
+          <div className="flex items-center gap-3">
+            <div
+              className="px-4 py-2.5 rounded-xl text-2xl font-black font-mono tracking-tight"
+              style={{
+                background: 'linear-gradient(145deg, #00ff88, #00cc6a)',
+                color: '#07070d',
+                boxShadow: '0 0 20px rgba(0,255,136,0.3)',
+                minWidth: 80,
+                textAlign: 'center',
+              }}
+            >
+              {engineAnalysis.bestMove}
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span
+                className="text-lg font-bold"
+                style={{ color: eval_ >= 0 ? '#00ff88' : '#ef4444' }}
+              >
+                {isMate && mateIn !== null
+                  ? `${mateIn > 0 ? '+' : '-'}M${Math.abs(mateIn)}`
+                  : `${eval_ >= 0 ? '+' : ''}${(eval_ / 100).toFixed(2)}`}
+              </span>
+              <span className="text-[10px] text-white/40">
+                d{engineAnalysis.depth} · {engineAnalysis.nodes.toLocaleString()}n
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="text-sm text-white/30 italic">
+            {isAnalyzing ? 'Thinking...' : 'Make a move to start'}
+          </div>
+        )}
+      </div>
+
+      {/* ── Engine Header ─────────────────────────────────────────────── */}
       <div className="glass-panel rounded-xl p-3">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
@@ -119,7 +196,6 @@ export default function RightPanel() {
           >
             <option value={1}>Depth 1</option>
             <option value={2}>Depth 2</option>
-            <option value={3}>Depth 3</option>
             <option value={4}>Depth 4</option>
             <option value={6}>Depth 6</option>
             <option value={8}>Depth 8 (Pro)</option>
@@ -134,20 +210,14 @@ export default function RightPanel() {
             ? 'bg-[#00ff88]/10 border border-[#00ff88]/20' 
             : 'bg-[#0a0c14] border border-white/5'
         }`}>
-          <div className="flex items-center justify-between">
-            <p className="text-[10px] text-white/40 uppercase tracking-tighter font-bold">
-              Status
-            </p>
-            {isAnalyzing && <div className="thinking-indicator w-1 h-1 rounded-full bg-[#00ff88]" />}
-          </div>
-          <p className={`text-xs font-medium mt-0.5 ${
+          <p className={`text-xs font-medium ${
             (userSide !== 'none' && turn === userSide) ? 'text-[#00ff88]' : 'text-white/80'
           }`} role="status" aria-live="polite">
             {userSide === 'none' 
               ? gameStatus 
               : turn === userSide 
-                ? '🎯 Your turn: Calculating best move...' 
-                : '⏳ Waiting for opponent move...'}
+                ? '🎯 Your turn: Best move above!' 
+                : '⏳ Type opponent move above...'}
           </p>
         </div>
 
@@ -177,26 +247,6 @@ export default function RightPanel() {
             </div>
           )}
         </div>
-
-        {/* Analysis Details */}
-        {engineAnalysis && (
-          <div className="space-y-1 text-[11px] text-white/50">
-            <div className="flex justify-between">
-              <span>Depth</span>
-              <span className="text-white/70">{engineAnalysis.depth}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Nodes</span>
-              <span className="text-white/70">{engineAnalysis.nodes.toLocaleString()}</span>
-            </div>
-            {engineAnalysis.bestMove && (
-              <div className="flex justify-between">
-                <span>Best</span>
-                <span className="text-[#00ff88] font-semibold">{engineAnalysis.bestMove}</span>
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Top Moves */}
@@ -242,18 +292,6 @@ export default function RightPanel() {
               </div>
             ))}
           </div>
-        </div>
-      )}
-
-      {/* PV Line */}
-      {engineAnalysis && engineAnalysis.pv.length > 1 && (
-        <div className="glass-panel rounded-xl p-3">
-          <h3 className="text-[10px] font-semibold text-white/50 uppercase tracking-wider mb-1">
-            Principal Variation
-          </h3>
-          <p className="text-xs font-mono text-white/60 leading-relaxed">
-            {engineAnalysis.pv.join(' ')}
-          </p>
         </div>
       )}
     </div>
