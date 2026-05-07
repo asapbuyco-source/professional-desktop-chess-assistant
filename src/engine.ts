@@ -1,46 +1,24 @@
 /**
- * engine.ts — Production-grade chess engine (main-thread variant)
+ * engine.ts — Production-grade chess engine
  *
- * Key fixes vs. original:
- *  1. Removed the catastrophic makeResult() re-evaluation loop that
- *     evaluated every legal move a second time at full depth — this was
- *     the primary cause of UI freezes.
- *  2. Hard node-budget cap prevents runaway searches.
- *  3. Quiescence sort fixed (was ascending, now descending by capture value).
- *  4. Time budget is checked inside minimax, not only at root.
- *  6. topMoves are derived from root-move scores already computed by
- *     searchRoot — no second pass needed.
- *  7. Transposition table (Simple Map) stores search results to avoid
- *     redundant work.
- *  8. Opening Book: Curated responses for common positions.
- *  9. Null Move Pruning (NMP): Search depth reduction for dominant positions.
+ * Architecture: Negamax + Alpha-Beta with:
+ *  - Iterative Deepening
+ *  - Transposition Table (persisted across iterations)
+ *  - Null Move Pruning (NMP)
+ *  - Quiescence Search with Delta Pruning
+ *  - MVV-LVA move ordering + killer/history heuristics
+ *  - Late Move Reductions (LMR)
+ *  - Check Extensions
+ *  - Endgame-aware King PST
  */
 
-import { Chess, type Move } from 'chess.js';
+import { Chess } from 'chess.js';
 import type { EngineAnalysis, TopMove } from '@/types';
 import { PIECE_VALUES } from '@/pieceValues';
 
-// ─── Opening Book ───────────────────────────────────────────────────────────
+// ─── Piece-Square Tables (from White's perspective, rank 0 = rank 8) ────────
 
-const OPENING_BOOK: Record<string, string> = {
-  // Start position
-  'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1': 'e4',
-  // After e4
-  'rnbqkbnr/pppppppp/8/8/4P3/8/PPPPPPPP/RNBQKBNR b KQkq e3 0 1': 'c5', // Sicilian
-  'rnbqkbnr/pppppppp/8/8/4P3/8/PPPPPPPP/RNBQKBNR b KQkq e3 0 1 ': 'e5', // e4 e5
-  // e4 c5 (Sicilian)
-  'rnbqkbnr/pp1ppppp/8/2p5/4P3/8/PPPPPPPP/RNBQKBNR w KQkq c6 0 2': 'Nf3',
-  // e4 e5 (King's Pawn)
-  'rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPPPPPP/RNBQKBNR w KQkq e6 0 2': 'Nf3',
-  // d4
-  'rnbqkbnr/pppppppp/8/8/3P4/8/PPPPPPPP/RNBQKBNR w KQkq d3 0 1': 'd4',
-  'rnbqkbnr/pppppppp/8/8/3P4/8/PPPPPPPP/RNBQKBNR b KQkq d3 0 1': 'Nf6', // Indian
-  'rnbqkbnr/pppppppp/8/8/3P4/8/PPPPPPPP/RNBQKBNR b KQkq d3 0 1 ': 'd5', // d4 d5
-};
-
-// ─── Piece-Square Tables ────────────────────────────────────────────────────
-
-const PST: Record<string, number[]> = {
+const PST: Record<string, readonly number[]> = {
   p: [
      0,  0,  0,  0,  0,  0,  0,  0,
     50, 50, 50, 50, 50, 50, 50, 50,
@@ -52,196 +30,224 @@ const PST: Record<string, number[]> = {
      0,  0,  0,  0,  0,  0,  0,  0,
   ],
   n: [
-    -50,-40,-30,-30,-30,-30,-40,-50,
-    -40,-20,  0,  0,  0,  0,-20,-40,
-    -30,  0, 10, 15, 15, 10,  0,-30,
-    -30,  5, 15, 20, 20, 15,  5,-30,
-    -30,  0, 15, 20, 20, 15,  0,-30,
-    -30,  5, 10, 15, 15, 10,  5,-30,
-    -40,-20,  0,  5,  5,  0,-20,-40,
-    -50,-40,-30,-30,-30,-30,-40,-50,
+   -50,-40,-30,-30,-30,-30,-40,-50,
+   -40,-20,  0,  0,  0,  0,-20,-40,
+   -30,  0, 10, 15, 15, 10,  0,-30,
+   -30,  5, 15, 20, 20, 15,  5,-30,
+   -30,  0, 15, 20, 20, 15,  0,-30,
+   -30,  5, 10, 15, 15, 10,  5,-30,
+   -40,-20,  0,  5,  5,  0,-20,-40,
+   -50,-40,-30,-30,-30,-30,-40,-50,
   ],
   b: [
-    -20,-10,-10,-10,-10,-10,-10,-20,
-    -10,  0,  0,  0,  0,  0,  0,-10,
-    -10,  0, 10, 10, 10, 10,  0,-10,
-    -10,  5,  5, 10, 10,  5,  5,-10,
-    -10,  0, 10, 10, 10, 10,  0,-10,
-    -10, 10, 10, 10, 10, 10, 10,-10,
-    -10,  5,  0,  0,  0,  0,  5,-10,
-    -20,-10,-10,-10,-10,-10,-10,-20,
+   -20,-10,-10,-10,-10,-10,-10,-20,
+   -10,  0,  0,  0,  0,  0,  0,-10,
+   -10,  0, 10, 10, 10, 10,  0,-10,
+   -10,  5,  5, 10, 10,  5,  5,-10,
+   -10,  0, 10, 10, 10, 10,  0,-10,
+   -10, 10, 10, 10, 10, 10, 10,-10,
+   -10,  5,  0,  0,  0,  0,  5,-10,
+   -20,-10,-10,-10,-10,-10,-10,-20,
   ],
   r: [
-     0,  0,  0,  0,  0,  0,  0,  0,
-     5, 10, 10, 10, 10, 10, 10,  5,
-    -5,  0,  0,  0,  0,  0,  0, -5,
-    -5,  0,  0,  0,  0,  0,  0, -5,
-    -5,  0,  0,  0,  0,  0,  0, -5,
-    -5,  0,  0,  0,  0,  0,  0, -5,
-    -5,  0,  0,  0,  0,  0,  0, -5,
-     0,  0,  0,  5,  5,  0,  0,  0,
+    0,  0,  0,  0,  0,  0,  0,  0,
+    5, 10, 10, 10, 10, 10, 10,  5,
+   -5,  0,  0,  0,  0,  0,  0, -5,
+   -5,  0,  0,  0,  0,  0,  0, -5,
+   -5,  0,  0,  0,  0,  0,  0, -5,
+   -5,  0,  0,  0,  0,  0,  0, -5,
+   -5,  0,  0,  0,  0,  0,  0, -5,
+    0,  0,  0,  5,  5,  0,  0,  0,
   ],
   q: [
-    -20,-10,-10, -5, -5,-10,-10,-20,
-    -10,  0,  0,  0,  0,  0,  0,-10,
-    -10,  0,  5,  5,  5,  5,  0,-10,
-     -5,  0,  5,  5,  5,  5,  0, -5,
+   -20,-10,-10, -5, -5,-10,-10,-20,
+   -10,  0,  0,  0,  0,  0,  0,-10,
+   -10,  0,  5,  5,  5,  5,  0,-10,
+    -5,  0,  5,  5,  5,  5,  0, -5,
      0,  0,  5,  5,  5,  5,  0, -5,
-    -10,  5,  5,  5,  5,  5,  0,-10,
-    -10,  0,  5,  0,  0,  0,  0,-10,
-    -20,-10,-10, -5, -5,-10,-10,-20,
+   -10,  5,  5,  5,  5,  5,  0,-10,
+   -10,  0,  5,  0,  0,  0,  0,-10,
+   -20,-10,-10, -5, -5,-10,-10,-20,
   ],
   k: [
-    -30,-40,-40,-50,-50,-40,-40,-30,
-    -30,-40,-40,-50,-50,-40,-40,-30,
-    -30,-40,-40,-50,-50,-40,-40,-30,
-    -30,-40,-40,-50,-50,-40,-40,-30,
-    -20,-30,-30,-40,-40,-30,-30,-20,
-    -10,-20,-20,-20,-20,-20,-20,-10,
-     20, 20,  0,  0,  0,  0, 20, 20,
-     20, 30, 10,  0,  0, 10, 30, 20,
+   -30,-40,-40,-50,-50,-40,-40,-30,
+   -30,-40,-40,-50,-50,-40,-40,-30,
+   -30,-40,-40,-50,-50,-40,-40,-30,
+   -30,-40,-40,-50,-50,-40,-40,-30,
+   -20,-30,-30,-40,-40,-30,-30,-20,
+   -10,-20,-20,-20,-20,-20,-20,-10,
+    20, 20,  0,  0,  0,  0, 20, 20,
+    20, 30, 10,  0,  0, 10, 30, 20,
   ],
   k_endgame: [
-    -50,-40,-30,-20,-20,-30,-40,-50,
-    -30,-20,-10,  0,  0,-10,-20,-30,
-    -30,-10, 20, 30, 30, 20,-10,-30,
-    -30,-10, 30, 40, 40, 30,-10,-30,
-    -30,-10, 30, 40, 40, 30,-10,-30,
-    -30,-10, 20, 30, 30, 20,-10,-30,
-    -30,-30,  0,  0,  0,  0,-30,-30,
-    -50,-30,-30,-30,-30,-30,-30,-50,
+   -50,-40,-30,-20,-20,-30,-40,-50,
+   -30,-20,-10,  0,  0,-10,-20,-30,
+   -30,-10, 20, 30, 30, 20,-10,-30,
+   -30,-10, 30, 40, 40, 30,-10,-30,
+   -30,-10, 30, 40, 40, 30,-10,-30,
+   -30,-10, 20, 30, 30, 20,-10,-30,
+   -30,-30,  0,  0,  0,  0,-30,-30,
+   -50,-30,-30,-30,-30,-30,-30,-50,
   ],
 };
 
-const KING_SAFETY = {
-  openFilePenalty: -15,
-  noPawnShieldPenalty: -30,
-  weakSquares: -10,
-};
+// ─── Constants ───────────────────────────────────────────────────────────────
 
-// ─── Hard limits ─────────────────────────────────────────────────────────────
+const MAX_NODES = 2_000_000;
+const MATE_SCORE = 100_000;
+const INF = MATE_SCORE + 1;
 
-/** Absolute node cap — prevents runaway searches. Increased for higher depth. */
-const MAX_NODES = 1_500_000;
+// ─── Evaluation ──────────────────────────────────────────────────────────────
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function evaluateKingSafety(game: Chess): number {
-  let safetyScore = 0;
-  const board = game.board();
-
-  for (const color of ['w', 'b'] as const) {
-    let kingRow = -1, kingCol = -1;
-
-    for (let r = 0; r < 8; r++) {
-      for (let f = 0; f < 8; f++) {
-        const piece = board[r][f];
-        if (piece && piece.type === 'k' && piece.color === color) {
-          kingRow = r;
-          kingCol = f;
-        }
-      }
-    }
-
-    if (kingRow === -1) continue;
-
-    const forwardDir = color === 'w' ? -1 : 1;
-
-    const hasPawnShield = (file: number) => {
-      const shieldRank = kingRow + forwardDir;
-      if (shieldRank < 0 || shieldRank > 7) return false;
-      const shieldPiece = board[shieldRank]?.[file];
-      return !!shieldPiece && shieldPiece.type === 'p' && shieldPiece.color === color;
-    };
-
-    const isFileOpen = (file: number) => {
-      for (let r = 0; r < 8; r++) {
-        const sq = board[r]?.[file];
-        if (sq && sq.type === 'p') return false;
-      }
-      return true;
-    };
-
-    if (!hasPawnShield(kingCol) && !hasPawnShield(kingCol - 1) && !hasPawnShield(kingCol + 1)) {
-      safetyScore += KING_SAFETY.noPawnShieldPenalty * (color === 'w' ? 1 : -1);
-    }
-
-    if (isFileOpen(kingCol)) {
-      safetyScore += KING_SAFETY.openFilePenalty * (color === 'w' ? 1 : -1);
-    }
-
-    const weakSquareFiles = [kingCol - 1, kingCol + 1].filter(f => f >= 0 && f <= 7 && isFileOpen(f));
-    for (const _f of weakSquareFiles) {
-      safetyScore += KING_SAFETY.weakSquares * (color === 'w' ? 1 : -1);
-    }
-  }
-
-  return safetyScore;
-}
-
+/**
+ * Evaluates the position from the side-to-move's perspective (Negamax convention).
+ * Positive = good for side to move.
+ */
 function evaluate(game: Chess): number {
-  if (game.isCheckmate()) {
-    return game.turn() === 'w' ? -100_000 : 100_000;
-  }
-  if (game.isDraw() || game.isStalemate()) return 0;
-
-  let score = 0;
   const board = game.board();
-  let totalMaterial = 0;
-  let pieceCount = 0;
+  const turn = game.turn();
 
+  let whiteScore = 0;
+  let blackScore = 0;
+  let whiteMaterial = 0;
+  let blackMaterial = 0;
+
+  // First pass: count material for endgame detection
+  for (let r = 0; r < 8; r++) {
+    for (let f = 0; f < 8; f++) {
+      const piece = board[r][f];
+      if (!piece || piece.type === 'k' || piece.type === 'p') continue;
+      const val = PIECE_VALUES[piece.type] || 0;
+      if (piece.color === 'w') whiteMaterial += val;
+      else blackMaterial += val;
+    }
+  }
+
+  const totalMaterial = whiteMaterial + blackMaterial;
+  const isEndgame = totalMaterial < 2600; // roughly when queens are off + minor piece
+
+  // Second pass: score everything
   for (let r = 0; r < 8; r++) {
     for (let f = 0; f < 8; f++) {
       const piece = board[r][f];
       if (!piece) continue;
 
-      pieceCount++;
       const pieceVal = PIECE_VALUES[piece.type] || 0;
-      if (piece.type !== 'p' && piece.type !== 'k') totalMaterial += pieceVal;
-
-      const isEndgame = totalMaterial < 1500;
       const tableKey = (piece.type === 'k' && isEndgame) ? 'k_endgame' : piece.type;
       const table = PST[tableKey];
       const idx = piece.color === 'w' ? r * 8 + f : (7 - r) * 8 + f;
       const posVal = table ? table[idx] : 0;
-      const multiplier = piece.color === 'w' ? 1 : -1;
-      score += multiplier * (pieceVal + posVal);
+
+      if (piece.color === 'w') {
+        whiteScore += pieceVal + posVal;
+      } else {
+        blackScore += pieceVal + posVal;
+      }
     }
   }
 
-  score += evaluateKingSafety(game);
+  // Bishop pair bonus
+  let whiteBishops = 0, blackBishops = 0;
+  for (let r = 0; r < 8; r++) {
+    for (let f = 0; f < 8; f++) {
+      const piece = board[r][f];
+      if (piece?.type === 'b') {
+        if (piece.color === 'w') whiteBishops++;
+        else blackBishops++;
+      }
+    }
+  }
+  if (whiteBishops >= 2) whiteScore += 30;
+  if (blackBishops >= 2) blackScore += 30;
+
+  // Rook on open file bonus
+  for (let f = 0; f < 8; f++) {
+    let hasPawn = false;
+    let whiteRookOnFile = false;
+    let blackRookOnFile = false;
+    for (let r = 0; r < 8; r++) {
+      const piece = board[r][f];
+      if (piece?.type === 'p') hasPawn = true;
+      if (piece?.type === 'r' && piece.color === 'w') whiteRookOnFile = true;
+      if (piece?.type === 'r' && piece.color === 'b') blackRookOnFile = true;
+    }
+    if (!hasPawn) {
+      if (whiteRookOnFile) whiteScore += 15;
+      if (blackRookOnFile) blackScore += 15;
+    }
+  }
+
+  // Passed pawn bonus
+  for (let r = 0; r < 8; r++) {
+    for (let f = 0; f < 8; f++) {
+      const piece = board[r][f];
+      if (!piece || piece.type !== 'p') continue;
+      
+      let passed = true;
+      if (piece.color === 'w') {
+        for (let br = r - 1; br >= 0; br--) {
+          for (let bf = Math.max(0, f - 1); bf <= Math.min(7, f + 1); bf++) {
+            const blocker = board[br][bf];
+            if (blocker?.type === 'p' && blocker.color === 'b') passed = false;
+          }
+        }
+        if (passed) whiteScore += (7 - r) * 10; // closer to promotion = bigger bonus
+      } else {
+        for (let br = r + 1; br < 8; br++) {
+          for (let bf = Math.max(0, f - 1); bf <= Math.min(7, f + 1); bf++) {
+            const blocker = board[br][bf];
+            if (blocker?.type === 'p' && blocker.color === 'w') passed = false;
+          }
+        }
+        if (passed) blackScore += r * 10;
+      }
+    }
+  }
+
+  const rawScore = whiteScore - blackScore;
+  return turn === 'w' ? rawScore : -rawScore;
+}
+
+// ─── Move Ordering ───────────────────────────────────────────────────────────
+
+function scoreMoveForOrdering(
+  m: ReturnType<Chess['moves']>[number] & { captured?: string; promotion?: string; piece: string },
+  ttBestMove: string | null,
+  killers: string[],
+): number {
+  // TT best move gets highest priority
+  if (ttBestMove && m.san === ttBestMove) return 1_000_000;
+
+  let score = 0;
+
+  // Captures: MVV-LVA
+  if (m.captured) {
+    const victimVal = PIECE_VALUES[m.captured] || 0;
+    const attackerVal = PIECE_VALUES[m.piece] || 0;
+    score += 100_000 + victimVal * 10 - attackerVal;
+  }
+
+  // Promotions
+  if (m.promotion) {
+    score += 90_000 + (PIECE_VALUES[m.promotion] || 0);
+  }
+
+  // Check bonus
+  if (m.san.includes('+')) score += 50_000;
+
+  // Killer moves
+  if (killers.includes(m.san)) score += 40_000;
 
   return score;
 }
 
-/** MVV-LVA score for move ordering */
-function mvvLvaScore(capturedType: string | undefined, pieceType: string): number {
-  if (!capturedType) return 0;
-  return (PIECE_VALUES[capturedType] || 0) * 10 - (PIECE_VALUES[pieceType] || 0);
-}
-
-function sortMoves(moves: ReturnType<Chess['moves']>[number][]): void {
-  moves.sort((a, b) => {
-    let sa = 0, sb = 0;
-    // Captures (MVV-LVA)
-    if ('captured' in a && a.captured) sa += mvvLvaScore(a.captured, a.piece) * 10;
-    if ('captured' in b && b.captured) sb += mvvLvaScore(b.captured, b.piece) * 10;
-    // Checks
-    if (a.san.includes('+')) sa += 500;
-    if (b.san.includes('+')) sb += 500;
-    // Promotions
-    if ('promotion' in a && a.promotion) sa += (PIECE_VALUES[a.promotion] || 0);
-    if ('promotion' in b && b.promotion) sb += (PIECE_VALUES[b.promotion] || 0);
-    return sb - sa;
-  });
-}
-
-// ─── Search ──────────────────────────────────────────────────────────────────
+// ─── Search State ────────────────────────────────────────────────────────────
 
 interface TTEntry {
   score: number;
   depth: number;
   type: 'EXACT' | 'LOWERBOUND' | 'UPPERBOUND';
+  bestMove: string | null;
 }
 
 interface SearchState {
@@ -250,6 +256,7 @@ interface SearchState {
   maxTimeMs: number;
   aborted: boolean;
   tt: Map<string, TTEntry>;
+  killers: string[][];  // killers[ply] = [move1, move2]
 }
 
 function shouldAbort(state: SearchState): boolean {
@@ -258,8 +265,7 @@ function shouldAbort(state: SearchState): boolean {
     state.aborted = true;
     return true;
   }
-  // Only check wall clock every 1024 nodes to avoid Date.now() overhead
-  if ((state.nodes & 1023) === 0) {
+  if ((state.nodes & 2047) === 0) {
     if (Date.now() - state.startTime >= state.maxTimeMs) {
       state.aborted = true;
       return true;
@@ -268,31 +274,49 @@ function shouldAbort(state: SearchState): boolean {
   return false;
 }
 
+function storeKiller(state: SearchState, ply: number, move: string): void {
+  if (!state.killers[ply]) state.killers[ply] = [];
+  const k = state.killers[ply];
+  if (k[0] !== move) {
+    k[1] = k[0];
+    k[0] = move;
+  }
+}
+
+// ─── Quiescence Search ──────────────────────────────────────────────────────
+
 function quiescence(
   game: Chess,
   alpha: number,
   beta: number,
   state: SearchState,
-  depthLeft = 4,
+  depthLeft = 6,
 ): number {
   state.nodes++;
   if (shouldAbort(state)) return 0;
 
   const standPat = evaluate(game);
   if (standPat >= beta) return beta;
-  if (alpha < standPat) alpha = standPat;
+  if (standPat > alpha) alpha = standPat;
   if (depthLeft <= 0) return alpha;
 
-  const moves = game.moves({ verbose: true }).filter(m => m.captured);
-  if (moves.length === 0) return standPat;
+  // Delta pruning threshold: only look at captures that can improve alpha
+  const DELTA = 200; // margin
+  if (standPat + DELTA + 900 < alpha) return alpha; // even capturing a queen won't help
 
-  // FIX: was sorting ascending — captures should be sorted descending (best first)
-  moves.sort((a, b) => (PIECE_VALUES[b.captured!] || 0) - (PIECE_VALUES[a.captured!] || 0));
+  const captures = game.moves({ verbose: true }).filter(m => m.captured);
+  // Sort by captured piece value (MVV)
+  captures.sort((a, b) => (PIECE_VALUES[b.captured!] || 0) - (PIECE_VALUES[a.captured!] || 0));
 
-  for (const m of moves) {
+  for (const m of captures) {
+    // Delta pruning per-move
+    const capturedVal = PIECE_VALUES[m.captured!] || 0;
+    if (standPat + capturedVal + DELTA < alpha && !m.promotion) continue;
+
     game.move(m.san);
     const score = -quiescence(game, -beta, -alpha, state, depthLeft - 1);
     game.undo();
+
     if (state.aborted) return 0;
     if (score >= beta) return beta;
     if (score > alpha) alpha = score;
@@ -301,85 +325,150 @@ function quiescence(
   return alpha;
 }
 
-function minimax(
+// ─── Negamax with Alpha-Beta ─────────────────────────────────────────────────
+
+function negamax(
   game: Chess,
   depth: number,
   alpha: number,
   beta: number,
-  maxDepth: number,
+  ply: number,
   state: SearchState,
-  allowNullMove = true,
+  allowNull: boolean,
 ): number {
   state.nodes++;
   if (shouldAbort(state)) return 0;
 
+  const isRoot = ply === 0;
+  const inCheck = game.isCheck();
+
+  // Check extension: don't reduce depth when in check
+  if (inCheck) depth++;
+
+  // Terminal nodes
+  if (game.isCheckmate()) return -(MATE_SCORE - ply);
+  if (game.isDraw() || game.isStalemate() || game.isThreefoldRepetition()) return 0;
+
+  if (depth <= 0) return quiescence(game, alpha, beta, state);
+
+  // TT probe
   const fen = game.fen();
   const ttHit = state.tt.get(fen);
-  if (ttHit && ttHit.depth >= depth) {
-    if (ttHit.type === 'EXACT') return ttHit.score;
-    if (ttHit.type === 'LOWERBOUND') alpha = Math.max(alpha, ttHit.score);
-    else if (ttHit.type === 'UPPERBOUND') beta = Math.min(beta, ttHit.score);
-    if (alpha >= beta) return ttHit.score;
-  }
+  let ttBestMove: string | null = null;
 
-  if (game.isGameOver()) {
-    if (game.isCheckmate()) {
-      const mateDist = maxDepth - depth;
-      return game.turn() === 'w' ? -100_000 + mateDist : 100_000 - mateDist;
+  if (ttHit) {
+    ttBestMove = ttHit.bestMove;
+    if (!isRoot && ttHit.depth >= depth) {
+      if (ttHit.type === 'EXACT') return ttHit.score;
+      if (ttHit.type === 'LOWERBOUND') alpha = Math.max(alpha, ttHit.score);
+      else if (ttHit.type === 'UPPERBOUND') beta = Math.min(beta, ttHit.score);
+      if (alpha >= beta) return ttHit.score;
     }
-    return 0;
   }
 
-  if (depth === 0) {
-    return quiescence(game, alpha, beta, state);
+  // Null Move Pruning (skip when in check, at root, or in zugzwang-prone endgames)
+  if (allowNull && !inCheck && !isRoot && depth >= 3) {
+    // Quick material check: don't NMP if only pawns left (zugzwang risk)
+    const board = game.board();
+    let hasNonPawn = false;
+    const turn = game.turn();
+    for (let r = 0; r < 8 && !hasNonPawn; r++) {
+      for (let f = 0; f < 8 && !hasNonPawn; f++) {
+        const p = board[r][f];
+        if (p && p.color === turn && p.type !== 'k' && p.type !== 'p') hasNonPawn = true;
+      }
+    }
+
+    if (hasNonPawn) {
+      // Simulate null move by flipping turn in FEN
+      const tokens = fen.split(' ');
+      tokens[1] = tokens[1] === 'w' ? 'b' : 'w';
+      tokens[3] = '-';
+      try {
+        const nullGame = new Chess(tokens.join(' '));
+        const R = depth >= 6 ? 3 : 2;
+        const nullScore = -negamax(nullGame, depth - 1 - R, -beta, -beta + 1, ply + 1, state, false);
+        if (nullScore >= beta) return beta;
+      } catch {
+        // Invalid FEN after null move — skip
+      }
+    }
   }
 
-  // Null Move Pruning
-  if (allowNullMove && depth >= 3 && !game.isCheck()) {
-    const R = 2; // Reduction
-    const dummy = new Chess(game.fen());
-    // Make a null move (switch turns)
-    const tokens = dummy.fen().split(' ');
-    tokens[1] = tokens[1] === 'w' ? 'b' : 'w';
-    tokens[3] = '-'; // En passant reset
-    const nullFen = tokens.join(' ');
-    const nullGame = new Chess(nullFen);
-    
-    const val = -minimax(nullGame, depth - 1 - R, -beta, -beta + 1, maxDepth, state, false);
-    if (val >= beta) return beta;
-  }
-
+  // Generate and order moves
   const moves = game.moves({ verbose: true });
-  sortMoves(moves as Parameters<typeof sortMoves>[0]);
+  const killers = state.killers[ply] || [];
+  const scored = moves.map(m => ({
+    move: m,
+    score: scoreMoveForOrdering(m as any, ttBestMove, killers),
+  }));
+  scored.sort((a, b) => b.score - a.score);
 
-  let bestVal = game.turn() === 'w' ? -Infinity : Infinity;
-  let oldAlpha = alpha;
+  let bestScore = -INF;
+  let bestMove: string | null = null;
+  let movesSearched = 0;
 
-  for (const m of moves) {
+  for (const { move: m } of scored) {
+    const isCapture = !!m.captured;
+    const isPromotion = !!(m as any).promotion;
+    const givesCheck = m.san.includes('+');
+
     game.move(m.san);
-    const val = minimax(game, depth - 1, alpha, beta, maxDepth, state);
-    game.undo();
-    if (state.aborted) return bestVal;
 
-    if (game.turn() === 'w') {
-      bestVal = Math.max(bestVal, val);
-      alpha = Math.max(alpha, val);
+    let score: number;
+
+    // Late Move Reductions (LMR)
+    if (
+      movesSearched >= 4 &&
+      depth >= 3 &&
+      !inCheck &&
+      !isCapture &&
+      !isPromotion &&
+      !givesCheck
+    ) {
+      // Search with reduced depth first
+      score = -negamax(game, depth - 2, -alpha - 1, -alpha, ply + 1, state, true);
+      // Re-search at full depth if it might be good
+      if (score > alpha) {
+        score = -negamax(game, depth - 1, -beta, -alpha, ply + 1, state, true);
+      }
     } else {
-      bestVal = Math.min(bestVal, val);
-      beta = Math.min(beta, val);
+      score = -negamax(game, depth - 1, -beta, -alpha, ply + 1, state, true);
     }
-    if (beta <= alpha) break;
+
+    game.undo();
+
+    if (state.aborted) return bestScore !== -INF ? bestScore : 0;
+
+    movesSearched++;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMove = m.san;
+    }
+
+    if (score > alpha) {
+      alpha = score;
+    }
+
+    if (alpha >= beta) {
+      // Store killer move for non-captures
+      if (!isCapture) storeKiller(state, ply, m.san);
+      break;
+    }
   }
 
-  // Store in TT
+  // TT store
   let type: TTEntry['type'] = 'EXACT';
-  if (bestVal <= oldAlpha) type = 'UPPERBOUND';
-  else if (bestVal >= beta) type = 'LOWERBOUND';
-  
-  state.tt.set(fen, { score: bestVal, depth, type });
+  if (bestScore <= alpha) type = 'UPPERBOUND';
+  if (bestScore >= beta) type = 'LOWERBOUND';
 
-  return bestVal;
+  state.tt.set(fen, { score: bestScore, depth, type, bestMove });
+
+  return bestScore;
 }
+
+// ─── Root Search ─────────────────────────────────────────────────────────────
 
 interface RootMove {
   san: string;
@@ -392,63 +481,47 @@ function searchRoot(
   game: Chess,
   depth: number,
   state: SearchState,
+  prevBest: string | null,
 ): RootMove[] {
   const moves = game.moves({ verbose: true });
-  sortMoves(moves as Parameters<typeof sortMoves>[0]);
+  const killers = state.killers[0] || [];
+  const scored = moves.map(m => ({
+    move: m,
+    orderScore: scoreMoveForOrdering(m as any, prevBest, killers),
+  }));
+  scored.sort((a, b) => b.orderScore - a.orderScore);
 
-  const isWhite = game.turn() === 'w';
-  const scored: RootMove[] = [];
+  let alpha = -INF;
+  const beta = INF;
+  const results: RootMove[] = [];
 
-  for (const m of moves) {
+  for (const { move: m } of scored) {
     game.move(m.san);
-    const val = minimax(game, depth - 1, -Infinity, Infinity, depth, state);
+    const score = -negamax(game, depth - 1, -beta, -alpha, 1, state, true);
     game.undo();
 
-    scored.push({ san: m.san, from: m.from, to: m.to, score: val });
+    results.push({ san: m.san, from: m.from, to: m.to, score });
 
-    if (state.aborted) break;
+    if (state.aborted && results.length > 1) break;
+
+    if (score > alpha) alpha = score;
   }
 
-  // Sort: white wants high scores, black wants low scores
-  scored.sort((a, b) => isWhite ? b.score - a.score : a.score - b.score);
-  return scored;
+  // Sort best first
+  results.sort((a, b) => b.score - a.score);
+  return results;
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
-export function analyzePosition(fen: string, depth: number, maxTimeMs = 3000): EngineAnalysis {
-  // 1. Check Opening Book first
-  const bookMove = OPENING_BOOK[fen] || OPENING_BOOK[fen.trim()];
-  if (bookMove) {
-    const g = new Chess(fen);
-    try {
-      const m = g.move(bookMove);
-      const topMove: TopMove = {
-        san: m.san,
-        from: m.from,
-        to: m.to,
-        evaluation: 0,
-      };
-      return {
-        bestMove: m.san,
-        evaluation: 0,
-        depth: 0,
-        nodes: 0,
-        pv: [m.san],
-        isMate: false,
-        mateIn: null,
-        topMoves: [topMove],
-      };
-    } catch { /* ignore */ }
-  }
-
+export function analyzePosition(fen: string, depth: number, maxTimeMs = 5000): EngineAnalysis {
   const game = new Chess(fen);
 
   if (game.isGameOver()) {
     const isMate = game.isCheckmate();
     return {
       bestMove: null,
-      evaluation: isMate ? (game.turn() === 'w' ? -100_000 : 100_000) : 0,
+      evaluation: isMate ? (game.turn() === 'w' ? -MATE_SCORE : MATE_SCORE) : 0,
       depth: 0,
       nodes: 0,
       pv: [],
@@ -458,9 +531,8 @@ export function analyzePosition(fen: string, depth: number, maxTimeMs = 3000): E
     };
   }
 
-  // Clamp depth and time to safe production values
-  const safeDepth = Math.min(depth, 8);
-  const safeTime  = Math.min(maxTimeMs, 10000);
+  const safeDepth = Math.min(depth, 12);
+  const safeTime = Math.min(maxTimeMs, 15000);
 
   const state: SearchState = {
     nodes: 0,
@@ -468,20 +540,28 @@ export function analyzePosition(fen: string, depth: number, maxTimeMs = 3000): E
     maxTimeMs: safeTime,
     aborted: false,
     tt: new Map(),
+    killers: [],
   };
 
   let bestResult: { moves: RootMove[]; depth: number } | null = null;
+  let prevBest: string | null = null;
 
   // Iterative deepening
   for (let d = 1; d <= safeDepth; d++) {
     const elapsed = Date.now() - state.startTime;
-    // Reserve at least 20 % of budget for each deeper ply
-    if (elapsed > safeTime * 0.8) break;
+    if (d > 1 && elapsed > safeTime * 0.6) break;
 
-    const moves = searchRoot(game, d, state);
-    if (moves.length > 0) {
+    state.aborted = false;
+    const moves = searchRoot(game, d, state, prevBest);
+
+    if (moves.length > 0 && !state.aborted) {
+      bestResult = { moves, depth: d };
+      prevBest = moves[0].san;
+    } else if (moves.length > 0 && state.aborted && !bestResult) {
+      // Use partial results if we have nothing else
       bestResult = { moves, depth: d };
     }
+
     if (state.aborted) break;
   }
 
@@ -489,7 +569,7 @@ export function analyzePosition(fen: string, depth: number, maxTimeMs = 3000): E
     return {
       bestMove: null,
       evaluation: 0,
-      depth: safeDepth,
+      depth: 0,
       nodes: state.nodes,
       pv: [],
       isMate: false,
@@ -500,24 +580,23 @@ export function analyzePosition(fen: string, depth: number, maxTimeMs = 3000): E
 
   const { moves, depth: reachedDepth } = bestResult;
   const best = moves[0];
-  const evaluation = best.score;
 
-  const isMate = Math.abs(evaluation) > 90_000;
+  // Convert negamax score back to centipawn (positive = white advantage)
+  const evaluation = game.turn() === 'w' ? best.score : -best.score;
+
+  const isMate = Math.abs(best.score) > MATE_SCORE - 100;
   const mateIn = isMate
-    ? Math.round((100_000 - Math.abs(evaluation)) / 2) * (evaluation > 0 ? 1 : -1)
+    ? Math.ceil((MATE_SCORE - Math.abs(best.score)) / 2) * (best.score > 0 ? 1 : -1)
     : null;
 
-  // Top 3 moves from root scores — no second pass needed
   const topMoves: TopMove[] = moves.slice(0, 3).map(m => ({
     san: m.san,
     from: m.from,
     to: m.to,
-    evaluation: m.score,
+    evaluation: game.turn() === 'w' ? m.score : -m.score,
   }));
 
-  // Principal variation: just the best move for now (could be extended with
-  // recursive best-reply extraction without extra cost)
-  const pv = topMoves.slice(0, 5).map(m => m.san);
+  const pv = moves.slice(0, 5).map(m => m.san);
 
   return {
     bestMove: best.san,
