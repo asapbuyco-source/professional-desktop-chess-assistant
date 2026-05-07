@@ -121,9 +121,10 @@ export default function RightPanel() {
             <option value={2}>Depth 2</option>
             <option value={3}>Depth 3</option>
             <option value={4}>Depth 4</option>
-            <option value={5}>Depth 5</option>
             <option value={6}>Depth 6</option>
             <option value={8}>Depth 8 (Pro)</option>
+            <option value={10}>Depth 10 (Master)</option>
+            <option value={12}>Depth 12 (Max)</option>
           </select>
         </div>
 

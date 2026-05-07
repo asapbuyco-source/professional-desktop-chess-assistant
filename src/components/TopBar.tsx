@@ -140,19 +140,19 @@ function SettingsModal() {
                 id="engine-depth"
                 type="range" 
                 min={1} 
-                max={8} 
+                max={12} 
                 value={settings.engineDepth}
                 onChange={(e) => setEngineDepth(Number(e.target.value))}
                 className="flex-1 accent-[#00ff88]"
                 aria-valuemin={1}
-                aria-valuemax={8}
+                aria-valuemax={12}
                 aria-valuenow={settings.engineDepth}
               />
               <span className="text-sm text-[#00ff88] font-mono w-6">{settings.engineDepth}</span>
             </div>
-            {settings.engineDepth >= 7 && (
+            {settings.engineDepth >= 8 && (
               <p className="text-[10px] text-[#00ff88]/60 italic mt-1 ml-1">
-                Pro Search: Bot will be significantly stronger but takes longer to think.
+                {settings.engineDepth >= 10 ? '⚡ Master Mode: Deep analysis, may take several seconds.' : 'Pro Search: Significantly stronger engine.'}
               </p>
             )}
           </div>
